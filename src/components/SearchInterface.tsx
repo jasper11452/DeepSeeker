@@ -50,7 +50,7 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
       try {
         const results = await invoke<SearchResult[]>("search", {
           query: searchQuery,
-          collectionId,
+          collection_id: collectionId,
           limit: 20,
         });
         return results;
@@ -66,8 +66,8 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
   const indexMutation = useMutation({
     mutationFn: async (directoryPath: string) => {
       return await invoke<IndexProgress>("index_directory", {
-        collectionId,
-        directoryPath,
+        collection_id: collectionId,
+        directory_path: directoryPath,
       });
     },
     onSuccess: () => {
@@ -79,8 +79,8 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
   const fullReindexMutation = useMutation({
     mutationFn: async (directoryPath: string) => {
       return await invoke<IndexProgress>("full_reindex", {
-        collectionId,
-        directoryPath,
+        collection_id: collectionId,
+        directory_path: directoryPath,
       });
     },
     onSuccess: () => {
