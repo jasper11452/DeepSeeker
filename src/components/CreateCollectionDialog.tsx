@@ -3,7 +3,7 @@ import { useState } from "react";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (name: string, linkFolder: boolean) => void;
+  onSubmit: (name: string, linkFolder: boolean) => Promise<void>;
 }
 
 export default function CreateCollectionDialog({ isOpen, onClose, onSubmit }: Props) {
@@ -12,10 +12,10 @@ export default function CreateCollectionDialog({ isOpen, onClose, onSubmit }: Pr
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim()) {
-      onSubmit(name.trim(), linkFolder);
+      await onSubmit(name.trim(), linkFolder);
       setName("");
       setLinkFolder(false);
       onClose();
