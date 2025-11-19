@@ -1,7 +1,7 @@
 use crate::db;
 use crate::models::*;
 use crate::AppState;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -189,21 +189,23 @@ pub async fn index_directory(
                 Ok(crate::pdf_parser::PdfStatus::Success { text, page_count }) => {
                     let chunks = crate::pdf_parser::chunk_pdf_text(0, &text, page_count)
                         .map_err(|e| format!("Failed to chunk PDF: {}", e))?;
-                    (text, Ok(chunks))
+                    (text, Ok::<Vec<Chunk>, String>(chunks))
                 }
                 Ok(crate::pdf_parser::PdfStatus::ScannedPdf { page_count }) => {
-                    log::warn!("⚠️ Scanned PDF (Skipped): {}", path_str);
-                    // Create a placeholder chunk with warning
-                    let warning = format!(
-                        "⚠️ Scanned PDF (No text layer)\n\nThis PDF contains {} page(s) but no extractable text.\n\
-                        The file appears to be a scanned document or image-based PDF.\n\n\
-                        To index this content, you would need OCR (Optical Character Recognition).",
-                        page_count
+                    log::warn!(
+                        "⚠️ Scanned PDF (Skipped) - {} pages, no text layer: {}",
+                        page_count,
+                        path_str
                     );
                     processed += 1;
                     // Skip this file but log it
                     log::info!("Skipped scanned PDF ({}/{}): {}", processed, total_files, path_str);
                     continue; // Skip to next file
+                }
+                Ok(crate::pdf_parser::PdfStatus::Error(error_msg)) => {
+                    log::error!("PDF extraction error {}: {}", path_str, error_msg);
+                    processed += 1;
+                    continue;
                 }
                 Err(e) => {
                     log::error!("Failed to extract PDF {}: {}", path_str, e);

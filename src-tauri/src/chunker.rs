@@ -24,7 +24,7 @@ pub struct MarkdownChunker {
 }
 
 #[derive(Debug, Clone)]
-struct ChunkInfo {
+pub(crate) struct ChunkInfo {
     pub content: String,
     pub headers: Vec<String>,
     pub chunk_type: String,
@@ -198,7 +198,7 @@ pub fn chunk_markdown(doc_id: i64, markdown: &str) -> Result<Vec<Chunk>> {
     let chunks: Vec<Chunk> = chunk_infos
         .into_iter()
         .enumerate()
-        .map(|(idx, info)| Chunk {
+        .map(|(_idx, info)| Chunk {
             id: 0, // Will be set by database
             doc_id,
             content: info.content,

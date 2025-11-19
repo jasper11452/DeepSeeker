@@ -19,14 +19,14 @@ impl EmbeddingModel {
     }
 
     /// Generate embedding vector for text
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    pub fn embed(&self, _text: &str) -> Result<Vec<f32>> {
         // TODO: Implement actual embedding generation
         // For now, return empty vector
         Ok(vec![])
     }
 
     /// Batch embed multiple texts
-    pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    pub fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
         // TODO: Implement batch embedding
         Ok(vec![])
     }

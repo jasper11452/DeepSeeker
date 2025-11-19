@@ -19,7 +19,7 @@ pub fn search_hybrid(
     // For now, use pure BM25 search via FTS5
     // TODO: Implement hybrid scoring with vector similarity
 
-    let sql = if let Some(cid) = collection_id {
+    let sql = if collection_id.is_some() {
         format!(
             "SELECT
                 c.id as chunk_id,
@@ -59,7 +59,7 @@ pub fn search_hybrid(
 
     let mut stmt = conn.prepare(&sql)?;
 
-    let results = if let Some(cid) = collection_id {
+    let results: Vec<SearchResult> = if let Some(cid) = collection_id {
         stmt.query_map(params![query, cid, limit], |row| {
             let metadata_str: Option<String> = row.get(4)?;
             let metadata: Option<ChunkMetadata> = metadata_str
@@ -76,6 +76,7 @@ pub fn search_hybrid(
                 end_line: row.get::<_, i64>(6)? as usize,
             })
         })?
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         stmt.query_map(params![query, limit], |row| {
             let metadata_str: Option<String> = row.get(4)?;
@@ -93,9 +94,8 @@ pub fn search_hybrid(
                 end_line: row.get::<_, i64>(6)? as usize,
             })
         })?
+        .collect::<Result<Vec<_>, _>>()?
     };
-
-    let results: Vec<SearchResult> = results.collect::<Result<Vec<_>, _>>()?;
 
     log::info!("Found {} results for query: {}", results.len(), query);
 

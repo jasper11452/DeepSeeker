@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use deepseeker::*;
+use tauri::Manager;
 
 fn main() {
     env_logger::init();
@@ -45,7 +46,7 @@ fn main() {
 
             // Start HTTP server for browser extension in background
             let http_db_path = db_path.clone();
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 if let Err(e) = http_server::start_server(http_db_path).await {
                     log::error!("HTTP server error: {}", e);
                 }
