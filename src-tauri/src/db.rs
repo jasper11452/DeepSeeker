@@ -27,11 +27,19 @@ fn create_schema(conn: &Connection) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS collections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
+            folder_path TEXT,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            last_sync INTEGER,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         )",
         [],
     )?;
+
+    // Add new columns if they don't exist (for existing databases)
+    let _ = conn.execute("ALTER TABLE collections ADD COLUMN folder_path TEXT", []);
+    let _ = conn.execute("ALTER TABLE collections ADD COLUMN file_count INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE collections ADD COLUMN last_sync INTEGER", []);
 
     // Documents table
     conn.execute(

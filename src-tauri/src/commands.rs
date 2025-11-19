@@ -13,16 +13,17 @@ use walkdir::WalkDir;
 pub async fn create_collection(
     state: State<'_, AppState>,
     name: String,
+    folder_path: Option<String>,
 ) -> Result<Collection, String> {
-    log::info!("Creating collection: {}", name);
+    log::info!("Creating collection: {} with folder: {:?}", name, folder_path);
 
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
 
     let now = chrono::Utc::now().timestamp();
 
     conn.execute(
-        "INSERT INTO collections (name, created_at, updated_at) VALUES (?, ?, ?)",
-        params![name, now, now],
+        "INSERT INTO collections (name, folder_path, file_count, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+        params![name, folder_path, now, now],
     )
     .map_err(|e| format!("Failed to create collection: {}", e))?;
 
@@ -31,6 +32,9 @@ pub async fn create_collection(
     Ok(Collection {
         id,
         name,
+        folder_path,
+        file_count: 0,
+        last_sync: None,
         created_at: now,
         updated_at: now,
     })
@@ -43,7 +47,7 @@ pub async fn list_collections(state: State<'_, AppState>) -> Result<Vec<Collecti
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn
-        .prepare("SELECT id, name, created_at, updated_at FROM collections ORDER BY name")
+        .prepare("SELECT id, name, folder_path, file_count, last_sync, created_at, updated_at FROM collections ORDER BY name")
         .map_err(|e| e.to_string())?;
 
     let collections = stmt
@@ -51,8 +55,11 @@ pub async fn list_collections(state: State<'_, AppState>) -> Result<Vec<Collecti
             Ok(Collection {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3)?,
+                folder_path: row.get(2)?,
+                file_count: row.get(3)?,
+                last_sync: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -85,6 +92,63 @@ pub async fn cleanup_ghost_data(state: State<'_, AppState>) -> Result<usize, Str
 }
 
 #[tauri::command]
+pub async fn detect_ghost_files(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    log::info!("Detecting ghost files");
+
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT path FROM documents")
+        .map_err(|e| e.to_string())?;
+
+    let paths: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let ghost_files: Vec<String> = paths
+        .into_iter()
+        .filter(|path| !Path::new(path).exists())
+        .collect();
+
+    log::info!("Found {} ghost files", ghost_files.len());
+    Ok(ghost_files)
+}
+
+#[tauri::command]
+pub async fn full_reindex(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    directory_path: String,
+) -> Result<IndexProgress, String> {
+    log::info!("Full reindex for collection {} at {}", collection_id, directory_path);
+
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    // Delete all documents (and their chunks via CASCADE) for this collection
+    conn.execute(
+        "DELETE FROM documents WHERE collection_id = ?",
+        params![collection_id],
+    )
+    .map_err(|e| format!("Failed to clear collection data: {}", e))?;
+
+    // Reset collection metadata
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE collections SET file_count = 0, last_sync = NULL, updated_at = ? WHERE id = ?",
+        params![now, collection_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    log::info!("Cleared existing data for collection {}", collection_id);
+
+    // Re-run indexing
+    drop(conn); // Release connection before calling index_directory
+    index_directory(state, collection_id, directory_path).await
+}
+
+#[tauri::command]
 pub async fn index_directory(
     state: State<'_, AppState>,
     collection_id: i64,
@@ -98,13 +162,15 @@ pub async fn index_directory(
 
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
 
-    // Find all Markdown files
+    // Find all Markdown and PDF files
     let files: Vec<_> = WalkDir::new(&directory_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path().extension().and_then(|s| s.to_str()) == Some("md")
-                || e.path().extension().and_then(|s| s.to_str()) == Some("markdown")
+            let ext = e.path().extension().and_then(|s| s.to_str());
+            ext == Some("md")
+                || ext == Some("markdown")
+                || ext == Some("pdf")
         })
         .collect();
 
@@ -114,10 +180,47 @@ pub async fn index_directory(
     for entry in files {
         let path = entry.path();
         let path_str = path.to_string_lossy().to_string();
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
-        // Read file content
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {}", path_str, e))?;
+        // Determine file type and extract content
+        let (content, chunks_result) = if extension == "pdf" {
+            // Handle PDF files
+            match crate::pdf_parser::extract_text_from_pdf(path) {
+                Ok(crate::pdf_parser::PdfStatus::Success { text, page_count }) => {
+                    let chunks = crate::pdf_parser::chunk_pdf_text(0, &text, page_count)
+                        .map_err(|e| format!("Failed to chunk PDF: {}", e))?;
+                    (text, Ok(chunks))
+                }
+                Ok(crate::pdf_parser::PdfStatus::ScannedPdf { page_count }) => {
+                    log::warn!("⚠️ Scanned PDF (Skipped): {}", path_str);
+                    // Create a placeholder chunk with warning
+                    let warning = format!(
+                        "⚠️ Scanned PDF (No text layer)\n\nThis PDF contains {} page(s) but no extractable text.\n\
+                        The file appears to be a scanned document or image-based PDF.\n\n\
+                        To index this content, you would need OCR (Optical Character Recognition).",
+                        page_count
+                    );
+                    processed += 1;
+                    // Skip this file but log it
+                    log::info!("Skipped scanned PDF ({}/{}): {}", processed, total_files, path_str);
+                    continue; // Skip to next file
+                }
+                Err(e) => {
+                    log::error!("Failed to extract PDF {}: {}", path_str, e);
+                    processed += 1;
+                    continue;
+                }
+            }
+        } else {
+            // Handle Markdown files
+            let content = fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read {}: {}", path_str, e))?;
+
+            let chunks = crate::chunker::chunk_markdown(0, &content)
+                .map_err(|e| format!("Failed to chunk {}: {}", path_str, e))?;
+
+            (content, Ok(chunks))
+        };
 
         // Calculate hash
         let mut hasher = Sha256::new();
@@ -166,12 +269,10 @@ pub async fn index_directory(
 
         let doc_id = conn.last_insert_rowid();
 
-        // Chunk the document
-        let chunks = crate::chunker::chunk_markdown(doc_id, &content)
-            .map_err(|e| format!("Failed to chunk {}: {}", path_str, e))?;
-
-        // Insert chunks
-        for chunk in chunks {
+        // Insert chunks with correct doc_id
+        let mut chunks = chunks_result?;
+        for chunk in chunks.iter_mut() {
+            chunk.doc_id = doc_id;
             let metadata_json = serde_json::to_string(&chunk.metadata).ok();
 
             conn.execute(
@@ -192,6 +293,24 @@ pub async fn index_directory(
         processed += 1;
         log::info!("Indexed {} ({}/{})", path_str, processed, total_files);
     }
+
+    // Update collection metadata after indexing
+    let now = chrono::Utc::now().timestamp();
+    let file_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE collection_id = ?",
+            params![collection_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    conn.execute(
+        "UPDATE collections SET last_sync = ?, file_count = ?, updated_at = ? WHERE id = ?",
+        params![now, file_count, now, collection_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    log::info!("Collection {} updated: {} files indexed", collection_id, file_count);
 
     Ok(IndexProgress {
         total_files,

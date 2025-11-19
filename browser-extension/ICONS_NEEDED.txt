@@ -1,0 +1,15 @@
+Icon files needed for browser extension:
+
+- icon16.png (16x16 pixels) - Toolbar icon
+- icon48.png (48x48 pixels) - Extension manager icon
+- icon128.png (128x128 pixels) - Chrome Web Store icon
+- icon48-disabled.png (48x48 pixels) - Offline state icon
+
+Design suggestions:
+- Use a simple magnifying glass or search icon
+- DeepSeeker brand colors: #4a9eff (blue accent)
+- Dark background to match desktop app theme
+- Minimalist, high contrast for visibility
+
+Temporary solution: Use any PNG files with these dimensions for development.
+The extension will work without icons, Chrome will just show a default placeholder.

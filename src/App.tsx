@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import SearchInterface from "./components/SearchInterface";
 import CollectionManager from "./components/CollectionManager";
@@ -8,6 +8,9 @@ import CollectionManager from "./components/CollectionManager";
 interface Collection {
   id: number;
   name: string;
+  folder_path: string | null;
+  file_count: number;
+  last_sync: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -24,8 +27,8 @@ function App() {
   });
 
   const createCollectionMutation = useMutation({
-    mutationFn: async (name: string) => {
-      return await invoke("create_collection", { name });
+    mutationFn: async ({ name, folderPath }: { name: string; folderPath: string | null }) => {
+      return await invoke("create_collection", { name, folderPath });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["collections"] });
@@ -44,11 +47,27 @@ function App() {
     },
   });
 
-  const handleCreateCollection = () => {
+  const handleCreateCollection = async () => {
     const name = prompt("Enter collection name:");
-    if (name) {
-      createCollectionMutation.mutate(name);
+    if (!name) return;
+
+    // Ask if user wants to link a folder
+    const linkFolder = confirm("Do you want to link this collection to a specific folder?");
+    let folderPath: string | null = null;
+
+    if (linkFolder) {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select folder to index",
+      });
+
+      if (selected) {
+        folderPath = selected.path;
+      }
     }
+
+    createCollectionMutation.mutate({ name, folderPath });
   };
 
   return (

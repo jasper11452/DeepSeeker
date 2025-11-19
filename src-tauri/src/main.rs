@@ -8,6 +8,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::create_collection,
             commands::list_collections,
@@ -15,6 +16,8 @@ fn main() {
             commands::index_directory,
             commands::search,
             commands::cleanup_ghost_data,
+            commands::detect_ghost_files,
+            commands::full_reindex,
         ])
         .setup(|app| {
             // Initialize database on startup
@@ -39,6 +42,16 @@ fn main() {
             app.manage(AppState {
                 db_path: db_path.clone(),
             });
+
+            // Start HTTP server for browser extension in background
+            let http_db_path = db_path.clone();
+            tokio::spawn(async move {
+                if let Err(e) = http_server::start_server(http_db_path).await {
+                    log::error!("HTTP server error: {}", e);
+                }
+            });
+
+            log::info!("DeepSeeker initialized successfully");
 
             Ok(())
         })
