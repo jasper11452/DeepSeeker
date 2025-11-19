@@ -51,6 +51,7 @@ fn bm25_search_only(
             c.id as chunk_id,
             c.doc_id,
             d.path as document_path,
+            COALESCE(d.status, 'normal') as document_status,
             c.content,
             c.metadata,
             c.start_line,
@@ -67,6 +68,7 @@ fn bm25_search_only(
             c.id as chunk_id,
             c.doc_id,
             d.path as document_path,
+            COALESCE(d.status, 'normal') as document_status,
             c.content,
             c.metadata,
             c.start_line,
@@ -202,7 +204,7 @@ fn hybrid_search_full(
 
 /// Parse a search result row from SQL
 fn parse_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
-    let metadata_str: Option<String> = row.get(4)?;
+    let metadata_str: Option<String> = row.get(5)?;
     let metadata: Option<ChunkMetadata> =
         metadata_str.and_then(|s| serde_json::from_str(&s).ok());
 
@@ -210,11 +212,12 @@ fn parse_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
         chunk_id: row.get(0)?,
         doc_id: row.get(1)?,
         document_path: row.get(2)?,
-        content: row.get(3)?,
+        document_status: row.get(3)?,
+        content: row.get(4)?,
         metadata,
-        score: row.get::<_, f64>(7)? as f32,
-        start_line: row.get::<_, i64>(5)? as usize,
-        end_line: row.get::<_, i64>(6)? as usize,
+        score: row.get::<_, f64>(8)? as f32,
+        start_line: row.get::<_, i64>(6)? as usize,
+        end_line: row.get::<_, i64>(7)? as usize,
     })
 }
 

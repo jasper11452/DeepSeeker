@@ -72,7 +72,7 @@ function App() {
       });
 
       if (selected) {
-        folder_path = selected.path;
+        folder_path = selected as string;
       }
     }
 

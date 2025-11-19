@@ -19,6 +19,7 @@ fn main() {
             commands::cleanup_ghost_data,
             commands::detect_ghost_files,
             commands::full_reindex,
+            commands::open_file_at_line,
         ])
         .setup(|app| {
             // Initialize database on startup

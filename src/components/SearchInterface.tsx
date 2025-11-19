@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -8,6 +7,7 @@ interface SearchResult {
   chunk_id: number;
   doc_id: number;
   document_path: string;
+  document_status: string; // 'normal', 'scanned_pdf', 'error'
   content: string;
   metadata: {
     headers: string[];
@@ -35,6 +35,36 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const queryClient = useQueryClient();
+
+  // Highlight search keywords in content
+  const highlightText = useCallback((text: string, searchQuery: string) => {
+    if (!searchQuery.trim()) return text;
+
+    // Split query into individual keywords
+    const keywords = searchQuery.trim().split(/\s+/).filter(k => k.length > 0);
+
+    // Create a regex pattern that matches any of the keywords (case-insensitive)
+    const pattern = keywords
+      .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) // Escape special regex chars
+      .join('|');
+
+    const regex = new RegExp(`(${pattern})`, 'gi');
+
+    // Split text by matches and create highlighted segments
+    const parts = text.split(regex);
+
+    return parts.map((part, index) => {
+      // Check if this part matches any keyword (case-insensitive)
+      const isMatch = keywords.some(k =>
+        part.toLowerCase() === k.toLowerCase()
+      );
+
+      if (isMatch) {
+        return <mark key={index} className="search-highlight">{part}</mark>;
+      }
+      return <span key={index}>{part}</span>;
+    });
+  }, []);
 
   // Detect ghost files on mount
   const { data: ghostFiles, refetch: refetchGhostFiles } = useQuery<string[]>({
@@ -117,7 +147,7 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
     });
 
     if (selected) {
-      indexMutation.mutate(selected.path);
+      indexMutation.mutate(selected as string);
     }
   };
 
@@ -133,7 +163,7 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
     });
 
     if (selected) {
-      fullReindexMutation.mutate(selected.path);
+      fullReindexMutation.mutate(selected as string);
     }
   };
 
@@ -148,6 +178,18 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
     }
 
     cleanupGhostMutation.mutate();
+  };
+
+  const handleOpenFile = async (filePath: string, line: number) => {
+    try {
+      await invoke("open_file_at_line", {
+        file_path: filePath,
+        line: line,
+      });
+    } catch (error) {
+      console.error("Failed to open file:", error);
+      alert(`Failed to open file: ${error}`);
+    }
   };
 
   return (
@@ -236,13 +278,30 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
         )}
 
         {results.map((result) => (
-          <div key={result.chunk_id} className="result-card">
+          <div
+            key={result.chunk_id}
+            className="result-card"
+            onClick={() => handleOpenFile(result.document_path, result.start_line)}
+            style={{ cursor: 'pointer' }}
+          >
             <div className="result-header">
               <span className="result-path">{result.document_path}</span>
               <span className="result-location">
                 Lines {result.start_line}-{result.end_line}
               </span>
             </div>
+
+            {/* Display warning for scanned PDFs or errors */}
+            {result.document_status === "scanned_pdf" && (
+              <div className="pdf-warning">
+                ⚠️ <strong>Scanned PDF (Skipped)</strong> - No text layer available
+              </div>
+            )}
+            {result.document_status === "error" && (
+              <div className="pdf-warning error">
+                ❌ <strong>Processing Error</strong> - Failed to extract content
+              </div>
+            )}
 
             {result.metadata?.headers && result.metadata.headers.length > 0 && (
               <div className="result-breadcrumb">
@@ -254,7 +313,7 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
               {result.metadata?.language && (
                 <span className="language-tag">{result.metadata.language}</span>
               )}
-              {result.content}
+              <code>{highlightText(result.content, query)}</code>
             </pre>
 
             <div className="result-footer">
