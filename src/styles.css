@@ -140,14 +140,55 @@ code, pre {
   text-align: left;
   cursor: pointer;
   transition: opacity 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .collection-item:hover {
   opacity: 0.8;
 }
 
+.collection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .collection-name {
   font-weight: 500;
+}
+
+.collection-count {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.125rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.collection-list li.active .collection-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.collection-path {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.sync-time {
+  font-style: italic;
 }
 
 .btn-delete {
@@ -220,6 +261,42 @@ code, pre {
   background: var(--bg-secondary);
 }
 
+.btn-warning {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #f59e0b;
+  color: white;
+}
+
+.btn-warning:hover {
+  background: #d97706;
+}
+
+.btn-cleanup {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--success);
+  color: white;
+  font-size: 0.875rem;
+}
+
+.btn-cleanup:hover:not(:disabled) {
+  background: #22c55e;
+}
+
+.btn-cleanup:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Search Interface */
 .search-interface {
   max-width: 900px;
@@ -231,6 +308,52 @@ code, pre {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 2rem;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.ghost-notification {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ghost-message {
+  color: #fbbf24;
+  font-size: 0.9rem;
+}
+
+.cleanup-success {
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  color: var(--success);
+  text-align: center;
+}
+
+.indexing-progress,
+.indexing-success {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.indexing-success {
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .search-form {

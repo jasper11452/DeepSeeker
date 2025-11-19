@@ -4,6 +4,8 @@ pub mod chunker;
 pub mod embeddings;
 pub mod search;
 pub mod models;
+pub mod http_server;
+pub mod pdf_parser;
 
 use std::path::PathBuf;
 

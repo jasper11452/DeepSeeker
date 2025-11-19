@@ -35,11 +35,16 @@ pulldown-cmark = "0.12"
 walkdir = "2"
 sha2 = "0.10"
 hex = "0.4"
+pdf-extract = "0.7"
 
 # Utilities
 chrono = "0.4"
 log = "0.4"
 env_logger = "0.11"
+
+# HTTP Server for browser extension
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
 
 [features]
 default = ["custom-protocol"]

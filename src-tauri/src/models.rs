@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub struct Collection {
     pub id: i64,
     pub name: String,
+    pub folder_path: Option<String>,
+    pub file_count: i64,
+    pub last_sync: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
