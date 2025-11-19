@@ -39,6 +39,18 @@ fn main() {
             // Initialize database
             db::init_database(&db_path)?;
 
+            // Clean up ghost data (files that no longer exist on disk)
+            match db::cleanup_ghost_data(&db_path) {
+                Ok(count) => {
+                    if count > 0 {
+                        log::info!("Cleaned up {} ghost documents on startup", count);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to cleanup ghost data on startup: {}", e);
+                }
+            }
+
             // Store db path in app state
             app.manage(AppState {
                 db_path: db_path.clone(),
