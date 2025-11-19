@@ -24,7 +24,7 @@ pub struct MarkdownChunker {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ChunkInfo {
+pub struct ChunkInfo {
     pub content: String,
     pub headers: Vec<String>,
     pub chunk_type: String,
