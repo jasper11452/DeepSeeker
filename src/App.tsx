@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import SearchInterface from "./components/SearchInterface";
 import CollectionManager from "./components/CollectionManager";
+import CreateCollectionDialog from "./components/CreateCollectionDialog";
 
 interface Collection {
   id: number;
@@ -17,6 +18,7 @@ interface Collection {
 
 function App() {
   const [selectedCollection, setSelectedCollection] = useState<number | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: collections, isLoading } = useQuery<Collection[]>({
@@ -47,12 +49,11 @@ function App() {
     },
   });
 
-  const handleCreateCollection = async () => {
-    const name = prompt("Enter collection name:");
-    if (!name) return;
+  const handleOpenDialog = () => {
+    setIsDialogOpen(true);
+  };
 
-    // Ask if user wants to link a folder
-    const linkFolder = confirm("Do you want to link this collection to a specific folder?");
+  const handleCreateCollection = async (name: string, linkFolder: boolean) => {
     let folder_path: string | null = null;
 
     if (linkFolder) {
@@ -83,7 +84,7 @@ function App() {
             collections={collections || []}
             selectedCollection={selectedCollection}
             onSelectCollection={setSelectedCollection}
-            onCreateCollection={handleCreateCollection}
+            onCreateCollection={handleOpenDialog}
             onDeleteCollection={(id) => deleteCollectionMutation.mutate(id)}
             isLoading={isLoading}
           />
@@ -101,13 +102,19 @@ function App() {
             <div className="empty-state">
               <h2>Welcome to DeepSeeker</h2>
               <p>Select or create a collection to get started</p>
-              <button onClick={handleCreateCollection} className="btn-primary">
+              <button onClick={handleOpenDialog} className="btn-primary">
                 Create Your First Collection
               </button>
             </div>
           )}
         </main>
       </div>
+
+      <CreateCollectionDialog
+        isOpen={isDialogOpen}
+        onClose={() => setIsDialogOpen(false)}
+        onSubmit={handleCreateCollection}
+      />
     </div>
   );
 }
