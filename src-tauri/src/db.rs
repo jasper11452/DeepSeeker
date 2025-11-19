@@ -50,11 +50,15 @@ fn create_schema(conn: &Connection) -> Result<()> {
             hash TEXT NOT NULL,
             last_modified INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
+            status TEXT DEFAULT 'normal',
             FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
             UNIQUE(collection_id, path)
         )",
         [],
     )?;
+
+    // Add status column if it doesn't exist (for existing databases)
+    let _ = conn.execute("ALTER TABLE documents ADD COLUMN status TEXT DEFAULT 'normal'", []);
 
     // Chunks table with metadata
     conn.execute(

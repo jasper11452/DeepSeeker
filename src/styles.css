@@ -571,3 +571,27 @@ code, pre {
   justify-content: flex-end;
   margin-top: 2rem;
 }
+
+/* PDF Warning */
+.pdf-warning {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  color: #fbbf24;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pdf-warning.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: var(--danger);
+  color: #fca5a5;
+}
+
+.pdf-warning strong {
+  font-weight: 600;
+}

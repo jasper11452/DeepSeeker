@@ -19,6 +19,7 @@ pub struct Document {
     pub hash: String,
     pub last_modified: i64,
     pub created_at: i64,
+    pub status: String, // 'normal', 'scanned_pdf', 'error'
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +48,7 @@ pub struct SearchResult {
     pub chunk_id: i64,
     pub doc_id: i64,
     pub document_path: String,
+    pub document_status: String, // 'normal', 'scanned_pdf', 'error'
     pub content: String,
     pub metadata: Option<ChunkMetadata>,
     pub score: f32,
