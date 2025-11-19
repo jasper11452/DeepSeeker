@@ -333,3 +333,53 @@ pub async fn search(
     crate::search::search_hybrid(&state.db_path, &query, collection_id, limit.unwrap_or(20))
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn open_file_at_line(file_path: String, line: i64) -> Result<(), String> {
+    log::info!("Opening file: {} at line {}", file_path, line);
+
+    // Try to open with VSCode first (supports line jumping)
+    #[cfg(target_os = "windows")]
+    let vscode_cmd = "code.cmd";
+    #[cfg(not(target_os = "windows"))]
+    let vscode_cmd = "code";
+
+    // Try VSCode with --goto flag
+    let vscode_result = std::process::Command::new(vscode_cmd)
+        .arg("--goto")
+        .arg(format!("{}:{}", file_path, line))
+        .spawn();
+
+    if vscode_result.is_ok() {
+        log::info!("Opened with VSCode");
+        return Ok(());
+    }
+
+    // Fallback: Try to open with system default editor
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(&["/C", "start", "", &file_path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    log::info!("Opened with system default editor (no line jumping)");
+    Ok(())
+}
