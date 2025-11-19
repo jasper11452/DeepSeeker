@@ -27,8 +27,8 @@ function App() {
   });
 
   const createCollectionMutation = useMutation({
-    mutationFn: async ({ name, folderPath }: { name: string; folderPath: string | null }) => {
-      return await invoke("create_collection", { name, folderPath });
+    mutationFn: async ({ name, folder_path }: { name: string; folder_path: string | null }) => {
+      return await invoke("create_collection", { name, folder_path });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["collections"] });
@@ -37,7 +37,7 @@ function App() {
 
   const deleteCollectionMutation = useMutation({
     mutationFn: async (collectionId: number) => {
-      return await invoke("delete_collection", { collectionId });
+      return await invoke("delete_collection", { collection_id: collectionId });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["collections"] });
@@ -53,7 +53,7 @@ function App() {
 
     // Ask if user wants to link a folder
     const linkFolder = confirm("Do you want to link this collection to a specific folder?");
-    let folderPath: string | null = null;
+    let folder_path: string | null = null;
 
     if (linkFolder) {
       const selected = await openDialog({
@@ -63,11 +63,11 @@ function App() {
       });
 
       if (selected) {
-        folderPath = selected.path;
+        folder_path = selected.path;
       }
     }
 
-    createCollectionMutation.mutate({ name, folderPath });
+    createCollectionMutation.mutate({ name, folder_path });
   };
 
   return (
