@@ -8,6 +8,7 @@ interface SearchResult {
   chunk_id: number;
   doc_id: number;
   document_path: string;
+  document_status: string; // 'normal', 'scanned_pdf', 'error'
   content: string;
   metadata: {
     headers: string[];
@@ -243,6 +244,18 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
                 Lines {result.start_line}-{result.end_line}
               </span>
             </div>
+
+            {/* Display warning for scanned PDFs or errors */}
+            {result.document_status === "scanned_pdf" && (
+              <div className="pdf-warning">
+                ⚠️ <strong>Scanned PDF (Skipped)</strong> - No text layer available
+              </div>
+            )}
+            {result.document_status === "error" && (
+              <div className="pdf-warning error">
+                ❌ <strong>Processing Error</strong> - Failed to extract content
+              </div>
+            )}
 
             {result.metadata?.headers && result.metadata.headers.length > 0 && (
               <div className="result-breadcrumb">

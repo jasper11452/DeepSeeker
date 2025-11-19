@@ -183,13 +183,13 @@ pub async fn index_directory(
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
         // Determine file type and extract content
-        let (content, chunks_result) = if extension == "pdf" {
+        let (content, chunks_result, doc_status) = if extension == "pdf" {
             // Handle PDF files
             match crate::pdf_parser::extract_text_from_pdf(path) {
                 Ok(crate::pdf_parser::PdfStatus::Success { text, page_count }) => {
                     let chunks = crate::pdf_parser::chunk_pdf_text(0, &text, page_count)
                         .map_err(|e| format!("Failed to chunk PDF: {}", e))?;
-                    (text, Ok::<Vec<Chunk>, String>(chunks))
+                    (text, Ok::<Vec<Chunk>, String>(chunks), "normal".to_string())
                 }
                 Ok(crate::pdf_parser::PdfStatus::ScannedPdf { page_count }) => {
                     log::warn!(
@@ -197,20 +197,18 @@ pub async fn index_directory(
                         page_count,
                         path_str
                     );
-                    processed += 1;
-                    // Skip this file but log it
-                    log::info!("Skipped scanned PDF ({}/{}): {}", processed, total_files, path_str);
-                    continue; // Skip to next file
+                    // Store as scanned_pdf with empty content
+                    ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "scanned_pdf".to_string())
                 }
                 Ok(crate::pdf_parser::PdfStatus::Error(error_msg)) => {
                     log::error!("PDF extraction error {}: {}", path_str, error_msg);
-                    processed += 1;
-                    continue;
+                    // Store as error with empty content
+                    ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
                 }
                 Err(e) => {
                     log::error!("Failed to extract PDF {}: {}", path_str, e);
-                    processed += 1;
-                    continue;
+                    // Store as error with empty content
+                    ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
                 }
             }
         } else {
@@ -221,7 +219,7 @@ pub async fn index_directory(
             let chunks = crate::chunker::chunk_markdown(0, &content)
                 .map_err(|e| format!("Failed to chunk {}: {}", path_str, e))?;
 
-            (content, Ok(chunks))
+            (content, Ok(chunks), "normal".to_string())
         };
 
         // Calculate hash
@@ -263,9 +261,9 @@ pub async fn index_directory(
         // Insert document
         let now = chrono::Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO documents (collection_id, path, hash, last_modified, created_at)
-             VALUES (?, ?, ?, ?, ?)",
-            params![collection_id, path_str, hash, last_modified, now],
+            "INSERT INTO documents (collection_id, path, hash, last_modified, created_at, status)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![collection_id, path_str, hash, last_modified, now, doc_status],
         )
         .map_err(|e| e.to_string())?;
 
