@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use ndarray::{Array1, Array2};
-use ort::{GraphOptimizationLevel, Session};
+use ndarray::Array2;
+use ort::session::builder::GraphOptimizationLevel;
+use ort::session::Session;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -59,8 +60,8 @@ impl EmbeddingModel {
             .context("Failed to load ONNX model")?;
 
         // Load tokenizer
-        let tokenizer =
-            Tokenizer::from_file(tokenizer_path).context("Failed to load tokenizer")?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
         log::info!("Embedding model loaded successfully from {:?}", model_dir);
 
@@ -128,13 +129,17 @@ impl EmbeddingModel {
         let attention_mask_array =
             Array2::from_shape_vec((batch_size, MAX_SEQ_LENGTH), attention_mask)?;
 
+        // Convert to ort Value objects
+        let input_ids_value = ort::value::Value::from_array(input_ids_array)?;
+        let attention_mask_value = ort::value::Value::from_array(attention_mask_array)?;
+
         // Run inference
         let outputs = self
             .session
             .run(ort::inputs![
-                "input_ids" => input_ids_array,
-                "attention_mask" => attention_mask_array,
-            ]?)
+                "input_ids" => input_ids_value,
+                "attention_mask" => attention_mask_value,
+            ])
             .context("ONNX inference failed")?;
 
         // Extract embeddings from output
