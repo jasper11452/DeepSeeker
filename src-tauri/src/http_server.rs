@@ -178,3 +178,389 @@ async fn store_web_clip(
 
     Ok(doc_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tempfile::tempdir;
+    use tower::ServiceExt; // for `oneshot`
+
+    async fn create_test_app() -> (Router, PathBuf, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        db::init_database(&db_path).unwrap();
+
+        // Create a default collection for testing
+        let conn = db::get_connection(&db_path).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO collections (name, created_at, updated_at) VALUES (?, ?, ?)",
+            rusqlite::params!["default", now, now],
+        )
+        .unwrap();
+        drop(conn);
+
+        let state = Arc::new(ServerState {
+            db_path: db_path.clone(),
+        });
+
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
+
+        let app = Router::new()
+            .route("/api/health", get(health_check))
+            .route("/api/clip", post(handle_clip))
+            .layer(cors)
+            .with_state(state);
+
+        (app, db_path, dir)
+    }
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let (app, _db_path, _dir) = create_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let health: HealthResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(health.status, "ok");
+        assert!(!health.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clip_simple() {
+        let (app, db_path, _dir) = create_test_app().await;
+
+        let clip_request = ClipRequest {
+            url: "https://example.com/article".to_string(),
+            title: "Test Article".to_string(),
+            content: "This is the content of the test article.".to_string(),
+            context: None,
+            collection_id: Some(1),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "browser-extension".to_string(),
+        };
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let clip_response: ClipResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(clip_response.success);
+        assert!(clip_response.document_id.is_some());
+
+        // Verify it was stored in database
+        let conn = db::get_connection(&db_path).unwrap();
+        let doc_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(doc_count, 1);
+
+        let chunk_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(chunk_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_clip_with_context() {
+        let (app, db_path, _dir) = create_test_app().await;
+
+        let clip_request = ClipRequest {
+            url: "https://example.com/docs".to_string(),
+            title: "API Documentation".to_string(),
+            content: "Main API content here.".to_string(),
+            context: Some("Additional context about the API.".to_string()),
+            collection_id: Some(1),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "browser-extension".to_string(),
+        };
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify context was included in chunk
+        let conn = db::get_connection(&db_path).unwrap();
+        let content: String = conn
+            .query_row("SELECT content FROM chunks", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(content.contains("Main API content"));
+        assert!(content.contains("Additional context"));
+        assert!(content.contains("Context:"));
+    }
+
+    #[tokio::test]
+    async fn test_clip_duplicate_url() {
+        let (app, db_path, _dir) = create_test_app().await;
+
+        let clip_request1 = ClipRequest {
+            url: "https://example.com/page".to_string(),
+            title: "Original Title".to_string(),
+            content: "Original content.".to_string(),
+            context: None,
+            collection_id: Some(1),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "browser-extension".to_string(),
+        };
+
+        // First clip
+        let response1 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request1).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response1.status(), StatusCode::OK);
+
+        // Second clip with same URL but different content
+        let clip_request2 = ClipRequest {
+            url: "https://example.com/page".to_string(),
+            title: "Updated Title".to_string(),
+            content: "Updated content.".to_string(),
+            context: None,
+            collection_id: Some(1),
+            timestamp: "2024-01-02T12:00:00Z".to_string(),
+            source: "browser-extension".to_string(),
+        };
+
+        let response2 = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request2).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response2.status(), StatusCode::OK);
+
+        // Should only have one document (replaced)
+        let conn = db::get_connection(&db_path).unwrap();
+        let doc_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(doc_count, 1);
+
+        // Content should be updated
+        let content: String = conn
+            .query_row("SELECT content FROM chunks", [], |row| row.get(0))
+            .unwrap();
+        assert!(content.contains("Updated"));
+    }
+
+    #[tokio::test]
+    async fn test_clip_metadata() {
+        let (app, db_path, _dir) = create_test_app().await;
+
+        let clip_request = ClipRequest {
+            url: "https://example.com/tech".to_string(),
+            title: "Tech Article".to_string(),
+            content: "Technical content.".to_string(),
+            context: None,
+            collection_id: Some(1),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "chrome-extension".to_string(),
+        };
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify metadata was stored
+        let conn = db::get_connection(&db_path).unwrap();
+        let metadata: String = conn
+            .query_row("SELECT metadata FROM chunks", [], |row| row.get(0))
+            .unwrap();
+
+        let meta: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(meta["chunk_type"], "web");
+        assert_eq!(meta["url"], "https://example.com/tech");
+        assert_eq!(meta["source"], "chrome-extension");
+        assert_eq!(meta["headers"][0], "Tech Article");
+    }
+
+    #[tokio::test]
+    async fn test_clip_pseudo_path() {
+        let (app, db_path, _dir) = create_test_app().await;
+
+        let clip_request = ClipRequest {
+            url: "https://docs.rust-lang.org/book/ch01-00-getting-started.html".to_string(),
+            title: "Getting Started".to_string(),
+            content: "Rust getting started guide.".to_string(),
+            context: None,
+            collection_id: Some(1),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "browser-extension".to_string(),
+        };
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify pseudo-path was created correctly
+        let conn = db::get_connection(&db_path).unwrap();
+        let path: String = conn
+            .query_row("SELECT path FROM documents", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(path.starts_with("web://"));
+        assert!(path.contains("docs.rust-lang.org"));
+    }
+
+    #[tokio::test]
+    async fn test_store_web_clip_default_collection() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        db::init_database(&db_path).unwrap();
+
+        // Create collection with id 1
+        let conn = db::get_connection(&db_path).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO collections (id, name, created_at, updated_at) VALUES (1, ?, ?, ?)",
+            rusqlite::params!["default", now, now],
+        )
+        .unwrap();
+        drop(conn);
+
+        let clip_request = ClipRequest {
+            url: "https://example.com".to_string(),
+            title: "Example".to_string(),
+            content: "Example content".to_string(),
+            context: None,
+            collection_id: None, // No collection specified
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "test".to_string(),
+        };
+
+        let doc_id = store_web_clip(&db_path, clip_request).await.unwrap();
+        assert!(doc_id > 0);
+
+        // Verify it was stored in collection 1
+        let conn = db::get_connection(&db_path).unwrap();
+        let collection_id: i64 = conn
+            .query_row(
+                "SELECT collection_id FROM documents WHERE id = ?",
+                rusqlite::params![doc_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(collection_id, 1);
+    }
+
+    #[tokio::test]
+    async fn test_clip_fts_indexing() {
+        let (app, db_path, _dir) = create_test_app().await;
+
+        let clip_request = ClipRequest {
+            url: "https://example.com/rust".to_string(),
+            title: "Rust Programming Language".to_string(),
+            content: "Rust is a systems programming language focused on safety and performance."
+                .to_string(),
+            context: None,
+            collection_id: Some(1),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            source: "browser-extension".to_string(),
+        };
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&clip_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify FTS indexing works
+        let conn = db::get_connection(&db_path).unwrap();
+        let fts_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE content MATCH 'rust'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_count, 1);
+    }
+}
