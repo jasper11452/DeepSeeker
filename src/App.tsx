@@ -30,10 +30,16 @@ function App() {
 
   const createCollectionMutation = useMutation({
     mutationFn: async ({ name, folder_path }: { name: string; folder_path: string | null }) => {
+      console.log("Creating collection:", { name, folder_path });
       return await invoke("create_collection", { name, folder_path });
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log("Collection created successfully:", data);
       queryClient.invalidateQueries({ queryKey: ["collections"] });
+    },
+    onError: (error) => {
+      console.error("Failed to create collection:", error);
+      alert(`Failed to create collection: ${error}`);
     },
   });
 
@@ -68,7 +74,21 @@ function App() {
       }
     }
 
-    createCollectionMutation.mutate({ name, folder_path });
+    return new Promise<void>((resolve, reject) => {
+      createCollectionMutation.mutate(
+        { name, folder_path },
+        {
+          onSuccess: () => {
+            console.log("Collection created, resolving promise");
+            resolve();
+          },
+          onError: (error) => {
+            console.error("Collection creation failed, rejecting promise");
+            reject(error);
+          },
+        }
+      );
+    });
   };
 
   return (
