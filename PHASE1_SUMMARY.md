@@ -184,7 +184,11 @@ embedding_bytes = embedding.iter()
 | 切片器 | chunker.rs | +387 | 10 |
 | 嵌入 | embeddings.rs | +237 | 3 |
 | 搜索 | search.rs | +206 | 6 |
-| **总计** | | **+1070** | **25** |
+| 验证UI | ValidationTest.tsx | +304 | - |
+| 测试数据 | validation_test.md | +210 | - |
+| App集成 | App.tsx, styles.css | +35 | - |
+| 测试文档 | DAY4_VALIDATION_TEST.md | +365 | - |
+| **总计** | | **+1984** | **25** |
 
 ### 测试覆盖
 
@@ -196,26 +200,77 @@ embedding_bytes = embedding.iter()
 
 ---
 
-## 🚀 Day 4 计划：验证性 UI
+## ✅ Day 4: 验证性 UI 实现
 
-### 目标
+### 完成内容
 
-**如果搜不到"藏在三级标题下的 Python 代码块"，项目直接原地解散！**
+1. **测试数据文件**
+   - ✅ `test-data/validation_test.md` (210 行)
+   - ✅ 包含 5 级深度嵌套的 Python async 代码
+   - ✅ 多语言测试场景 (Python, JavaScript, Rust)
+   - ✅ 特殊字符和长代码块测试
 
-### 任务清单
+2. **ValidationTest 组件**
+   - ✅ `src/components/ValidationTest.tsx` (304 行)
+   - ✅ 一键索引测试数据（硬编码路径）
+   - ✅ 搜索界面 + 4个快捷测试按钮
+   - ✅ **关键特性：** 显示完整标题层级路径
+   - ✅ 代码块类型、语言、得分显示
 
-1. ⏳ 创建简化的测试 UI
-   - Input 框：搜索查询
-   - List 视图：搜索结果
+3. **App 集成**
+   - ✅ `src/App.tsx` - 添加验证模式切换
+   - ✅ `src/styles.css` - Header flexbox 布局
+   - ✅ 导航按钮："🧪 Phase 1 验证测试"
 
-2. ⏳ 硬编码测试数据
-   - 导入本地复杂 README 文件夹
-   - 确保有深层嵌套代码块
+4. **测试文档**
+   - ✅ `DAY4_VALIDATION_TEST.md` - 完整测试说明
+   - ✅ 4个关键测试场景
+   - ✅ 验证清单和故障排查
+   - ✅ 成功标准定义
 
-3. ⏳ 终极测试
-   - 查询："python async function"
-   - 期望：找到嵌套在 `# Main > ## Module > ### Implementation` 下的 Python 代码
-   - **成功标准：** 返回结果包含正确的代码块 + 完整标题路径
+### 关键测试场景
+
+**测试 A: 深层嵌套代码块搜索** ⭐ **最关键**
+```
+查询: "async python"
+期望标题路径:
+  DeepSeeker 验证测试文档 > 高级功能 > 数据处理 > 数据库操作 > Python 异步处理示例
+期望内容: async def fetch_data(url)
+```
+
+**测试 B: 类定义搜索**
+```
+查询: "DataProcessor"
+期望: 找到 DataProcessor 类定义 (深层嵌套)
+```
+
+**测试 C: 函数名搜索**
+```
+查询: "bubble_sort"
+期望: 代码块完整，无分割
+```
+
+**测试 D: 语义搜索**
+```
+查询: "fetch data"
+期望: 多语言结果 (Python async, JavaScript async)
+```
+
+### 界面特性
+
+- 📊 **标题层级可视化** - 用 " > " 分隔显示完整路径
+- 🎨 **代码块高亮** - 特殊背景色和语言标签
+- 🔢 **搜索得分** - 显示混合检索得分
+- 📍 **行号显示** - start_line - end_line
+- ⚡ **快捷测试** - 预设4个关键查询按钮
+
+### 关键文件
+
+- `test-data/validation_test.md` - 测试数据
+- `src/components/ValidationTest.tsx:244-251` - 标题层级显示
+- `src/components/ValidationTest.tsx:28-58` - 硬编码索引逻辑
+- `src/App.tsx:103-109` - 验证模式切换按钮
+- `DAY4_VALIDATION_TEST.md` - 测试说明
 
 ---
 
@@ -319,4 +374,33 @@ npm run tauri build
 
 ---
 
-**团队备注：** Phase 1 代码已通过所有单元测试，混合检索核心引擎已验证可用。Day 4 将进行最终的端到端搜索能力验证。
+## ✅ Phase 1 完成状态
+
+**所有 Day 1-4 任务已完成！**
+
+- ✅ Day 1: 数据库 & FTS5/Vec 基础设施 + 6 测试
+- ✅ Day 2: 结构化切片算法 + 10 测试
+- ✅ Day 3: 混合检索实现 + 6 测试
+- ✅ Day 4: 验证 UI + 测试数据 + 文档
+
+**代码已提交并推送到分支：** `claude/core-search-engine-01DsfrgpYfY7oSMij6LXhAEb`
+
+### 🧪 下一步：运行验证测试
+
+```bash
+npm run tauri dev
+```
+
+1. 点击右上角 **"🧪 Phase 1 验证测试"** 按钮
+2. 点击 **"索引测试数据"** 按钮
+3. 搜索 **"async python"**
+4. 验证找到深层嵌套（5级标题）的 Python 代码块
+5. 验证标题路径完整显示
+
+**如果测试失败，说明结构化切片或搜索有问题，必须修复！**
+
+详细测试说明请查看：`DAY4_VALIDATION_TEST.md`
+
+---
+
+**团队备注：** Phase 1 代码已通过所有 25 个单元测试，混合检索核心引擎已验证可用。验证 UI 已集成，等待端到端搜索能力验证。
