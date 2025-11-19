@@ -144,16 +144,15 @@ impl EmbeddingModel {
 
         // Extract embeddings from output
         // bge-m3 outputs sentence embeddings directly
-        let embeddings_tensor = outputs["sentence_embedding"]
-            .try_extract_tensor::<f32>()?
-            .view()
-            .to_owned();
+        // try_extract_tensor returns (&Shape, &[f32]) in ort 2.0
+        let (_shape, embeddings_data) = outputs["sentence_embedding"]
+            .try_extract_tensor::<f32>()?;
 
-        // Convert to Vec<Vec<f32>>
+        // Convert flat slice to Vec<Vec<f32>> by chunking
+        // Data is in row-major order: [batch_size, EMBEDDING_DIM]
         let mut result = Vec::with_capacity(batch_size);
-        for i in 0..batch_size {
-            let row = embeddings_tensor.row(i);
-            result.push(row.to_vec());
+        for chunk in embeddings_data.chunks(EMBEDDING_DIM) {
+            result.push(chunk.to_vec());
         }
 
         Ok(result)
