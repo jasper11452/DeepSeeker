@@ -311,4 +311,391 @@ This should reset H3 context.
         assert_eq!(code_chunks.len(), 1);
         assert!(code_chunks[0].content.len() > 1000); // Very long but intact
     }
+
+    // Test Case 1: Complex nested headers with code blocks
+    #[test]
+    fn test_complex_nested_headers_with_code() {
+        let markdown = r#"
+# DeepSeeker - AI Search Engine
+
+A local-first neural search engine for your documentation.
+
+## Installation
+
+### Prerequisites
+
+Before installing, ensure you have:
+
+```bash
+node --version  # v18+
+cargo --version # 1.70+
+```
+
+### Build from source
+
+Clone and install:
+
+```bash
+git clone https://github.com/user/deepseeker
+cd deepseeker
+cargo build --release
+```
+
+## Architecture
+
+### Core Components
+
+#### Search Engine
+
+The search engine uses hybrid retrieval:
+
+```python
+def hybrid_search(query, alpha=0.7):
+    bm25_score = fts5_search(query)
+    vec_score = vector_search(embed(query))
+    return alpha * vec_score + (1 - alpha) * bm25_score
+```
+
+#### Indexer
+
+Processes markdown with structure awareness.
+
+### Database Schema
+
+```sql
+CREATE TABLE chunks (
+    id INTEGER PRIMARY KEY,
+    content TEXT,
+    embedding BLOB
+);
+```
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        // Find the Python code chunk
+        let python_chunk = chunks.iter().find(|c|
+            c.chunk_type == "code" && c.language == Some("python".to_string())
+        );
+        assert!(python_chunk.is_some());
+
+        let python_chunk = python_chunk.unwrap();
+        // Should preserve full header hierarchy
+        assert!(python_chunk.headers.contains(&"DeepSeeker - AI Search Engine".to_string()));
+        assert!(python_chunk.headers.contains(&"Architecture".to_string()));
+        assert!(python_chunk.headers.contains(&"Core Components".to_string()));
+        assert!(python_chunk.headers.contains(&"Search Engine".to_string()));
+
+        // Code should be intact
+        assert!(python_chunk.content.contains("def hybrid_search"));
+        assert!(python_chunk.content.contains("return alpha"));
+    }
+
+    // Test Case 2: Multiple code blocks under same header
+    #[test]
+    fn test_multiple_code_blocks_same_header() {
+        let markdown = r#"
+# API Documentation
+
+## Authentication
+
+### JWT Token
+
+Generate token:
+
+```javascript
+const token = jwt.sign({ userId: 123 }, SECRET_KEY);
+```
+
+Verify token:
+
+```javascript
+const decoded = jwt.verify(token, SECRET_KEY);
+```
+
+Usage in requests:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" https://api.example.com
+```
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        let code_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == "code").collect();
+        assert_eq!(code_chunks.len(), 3);
+
+        // All should have same header context
+        for chunk in &code_chunks {
+            assert!(chunk.headers.contains(&"API Documentation".to_string()));
+            assert!(chunk.headers.contains(&"Authentication".to_string()));
+            assert!(chunk.headers.contains(&"JWT Token".to_string()));
+        }
+    }
+
+    // Test Case 3: Deeply nested structure (H1 > H2 > H3 > H4)
+    #[test]
+    fn test_deep_nesting() {
+        let markdown = r#"
+# Project
+
+## Module A
+
+### Component X
+
+#### Subcomponent Alpha
+
+This is deeply nested content.
+
+```rust
+fn deeply_nested() {
+    println!("Found me!");
+}
+```
+
+## Module B
+
+Content under Module B should not have Module A context.
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        // Find code chunk
+        let code_chunk = chunks.iter().find(|c| c.chunk_type == "code");
+        assert!(code_chunk.is_some());
+
+        let code_chunk = code_chunk.unwrap();
+        assert_eq!(code_chunk.headers.len(), 4);
+        assert_eq!(code_chunk.headers[0], "Project");
+        assert_eq!(code_chunk.headers[1], "Module A");
+        assert_eq!(code_chunk.headers[2], "Component X");
+        assert_eq!(code_chunk.headers[3], "Subcomponent Alpha");
+
+        // Module B content should reset context
+        let module_b_chunks: Vec<_> = chunks.iter()
+            .filter(|c| c.headers.last() == Some(&"Module B".to_string()))
+            .collect();
+
+        for chunk in &module_b_chunks {
+            assert!(!chunk.headers.contains(&"Module A".to_string()));
+            assert!(!chunk.headers.contains(&"Component X".to_string()));
+        }
+    }
+
+    // Test Case 4: Code block with special characters
+    #[test]
+    fn test_code_block_special_chars() {
+        let markdown = r#"
+# Regex Examples
+
+## Pattern Matching
+
+```regex
+^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+```
+
+Special characters should be preserved.
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        let code_chunk = chunks.iter().find(|c| c.chunk_type == "code");
+        assert!(code_chunk.is_some());
+
+        let code_chunk = code_chunk.unwrap();
+        assert!(code_chunk.content.contains("[a-zA-Z0-9._%+-]+"));
+        assert!(code_chunk.content.contains("\\.[a-zA-Z]{2,}$"));
+    }
+
+    // Test Case 5: Mixed content types
+    #[test]
+    fn test_mixed_content_types() {
+        let markdown = r#"
+# Tutorial
+
+## Step 1: Setup
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+## Step 2: Configuration
+
+Edit your `config.json`:
+
+```json
+{
+  "port": 3000,
+  "host": "localhost"
+}
+```
+
+Some inline `code snippet` here.
+
+## Step 3: Run
+
+Execute the server:
+
+```bash
+npm start
+```
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        // Should have 3 code blocks
+        let code_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == "code").collect();
+        assert_eq!(code_chunks.len(), 3);
+
+        // Verify languages
+        assert_eq!(code_chunks[0].language, Some("bash".to_string()));
+        assert_eq!(code_chunks[1].language, Some("json".to_string()));
+        assert_eq!(code_chunks[2].language, Some("bash".to_string()));
+
+        // Inline code should be in text chunks, not separate code chunks
+        let text_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == "text").collect();
+        let has_inline_code = text_chunks.iter().any(|c| c.content.contains("`code snippet`"));
+        assert!(has_inline_code);
+    }
+
+    // Test Case 6: Empty code blocks
+    #[test]
+    fn test_empty_code_blocks() {
+        let markdown = r#"
+# Test
+
+```python
+```
+
+Content after empty block.
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        // Empty code blocks should not create chunks
+        let code_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == "code").collect();
+        assert_eq!(code_chunks.len(), 0);
+    }
+
+    // Test Case 7: Very long text with headers
+    #[test]
+    fn test_long_text_chunking() {
+        let long_paragraph = "Lorem ipsum dolor sit amet. ".repeat(100); // ~2800 chars
+        let markdown = format!(r#"
+# Long Article
+
+## Introduction
+
+{}
+
+## Conclusion
+
+Short ending.
+"#, long_paragraph);
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(&markdown).unwrap();
+
+        // Long text should be split into multiple chunks
+        let intro_chunks: Vec<_> = chunks.iter()
+            .filter(|c| c.headers.contains(&"Introduction".to_string()))
+            .collect();
+
+        assert!(intro_chunks.len() >= 2); // Should split long text
+    }
+
+    // Test Case 8: Indented code blocks
+    #[test]
+    fn test_indented_code_blocks() {
+        let markdown = r#"
+# Example
+
+Regular text.
+
+    indented code block
+    line 2
+    line 3
+
+More text.
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        let code_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == "code").collect();
+        assert_eq!(code_chunks.len(), 1);
+
+        // Indented blocks have no language
+        assert_eq!(code_chunks[0].language, None);
+        assert!(code_chunks[0].content.contains("indented code block"));
+    }
+
+    // Test Case 9: Real-world README structure
+    #[test]
+    fn test_realistic_readme() {
+        let markdown = include_str!("../tests/fixtures/sample_readme.md");
+
+        let mut chunker = MarkdownChunker::new();
+        let result = chunker.chunk(markdown);
+
+        // Should not panic on real README
+        assert!(result.is_ok());
+        let chunks = result.unwrap();
+        assert!(chunks.len() > 0);
+
+        // Should have some code chunks
+        let code_count = chunks.iter().filter(|c| c.chunk_type == "code").count();
+        assert!(code_count > 0);
+    }
+
+    // Test Case 10: Header context reset
+    #[test]
+    fn test_header_context_reset() {
+        let markdown = r#"
+# Main
+
+## Section A
+
+### Subsection A1
+
+Content A1.
+
+```python
+# Code under A1
+print("A1")
+```
+
+## Section B
+
+### Subsection B1
+
+Content B1.
+
+```python
+# Code under B1
+print("B1")
+```
+"#;
+
+        let mut chunker = MarkdownChunker::new();
+        let chunks = chunker.chunk(markdown).unwrap();
+
+        let code_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == "code").collect();
+        assert_eq!(code_chunks.len(), 2);
+
+        // First code block
+        assert_eq!(code_chunks[0].headers, vec!["Main", "Section A", "Subsection A1"]);
+
+        // Second code block (context should reset at Section B)
+        assert_eq!(code_chunks[1].headers, vec!["Main", "Section B", "Subsection B1"]);
+        assert!(!code_chunks[1].headers.contains(&"Section A".to_string()));
+    }
 }

@@ -22,15 +22,15 @@ thiserror = "2.0"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "vtab", "modern_sqlite"] }
-# sqlite-vec = "0.1"  # TODO: Add vector support
+sqlite-vec = "0.1"  # Vector similarity search extension
 
 # Markdown parsing
 pulldown-cmark = "0.12"
 
-# ML/Embeddings - TODO: Enable for full hybrid search
-# ort = { version = "2.0.0-rc.10", features = ["download-binaries", "half"] }
-# ndarray = "0.16"
-# tokenizers = "0.20"
+# ML/Embeddings for hybrid search
+ort = { version = "2.0.0-rc.10", features = ["download-binaries", "half"] }
+ndarray = "0.16"
+tokenizers = "0.20"
 
 # File handling
 walkdir = "2"
