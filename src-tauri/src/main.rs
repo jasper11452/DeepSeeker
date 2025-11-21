@@ -31,6 +31,7 @@ fn main() {
             commands::get_error_logs,
             commands::clear_error_logs,
             commands::get_performance_stats,
+            commands::get_chunk_context,
         ])
         .setup(|app| {
             // Initialize database on startup

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import SearchFilters, { SearchFiltersState } from "./SearchFilters";
+import ChunkPreviewPanel from "./ChunkPreviewPanel";
 
 interface SearchResult {
   chunk_id: number;
@@ -39,6 +40,7 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
   const [isSearching, setIsSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [filters, setFilters] = useState<SearchFiltersState>({ fileTypes: [] });
+  const [previewChunk, setPreviewChunk] = useState<SearchResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -77,17 +79,21 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
         if (selectedIndex >= 0 && selectedIndex < results.length) {
           e.preventDefault();
           const result = results[selectedIndex];
-          handleOpenFile(result.document_path, result.start_line);
+          setPreviewChunk(result);
         }
       } else if (e.key === "Escape") {
-        inputRef.current?.blur();
-        setSelectedIndex(-1);
+        if (previewChunk) {
+          setPreviewChunk(null);
+        } else {
+          inputRef.current?.blur();
+          setSelectedIndex(-1);
+        }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [results, selectedIndex]);
+  }, [results, selectedIndex, previewChunk]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -390,7 +396,7 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
               ? "bg-white/10 border-indigo-500/50 ring-1 ring-indigo-500/50"
               : "bg-white/5 hover:bg-white/10 border-white/5 hover:border-indigo-500/30"
               }`}
-            onClick={() => handleOpenFile(result.document_path, result.start_line)}
+            onClick={() => setPreviewChunk(result)}
           >
             <div className="flex justify-between items-start mb-3">
               <div className="flex flex-col gap-1">
@@ -463,6 +469,18 @@ export default function SearchInterface({ collectionId, collectionName }: Props)
           </div>
         ))}
       </div>
+
+      {/* Chunk Preview Panel */}
+      {previewChunk && (
+        <ChunkPreviewPanel
+          docId={previewChunk.doc_id}
+          startLine={previewChunk.start_line}
+          targetChunkId={previewChunk.chunk_id}
+          documentPath={previewChunk.document_path}
+          onClose={() => setPreviewChunk(null)}
+          onOpenFile={handleOpenFile}
+        />
+      )}
     </div>
   );
 }
