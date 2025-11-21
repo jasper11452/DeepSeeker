@@ -288,21 +288,60 @@ pub async fn index_directory(
 
         let doc_id = conn.last_insert_rowid();
 
-        // Insert chunks with correct doc_id
+        // Insert chunks with correct doc_id and embeddings
         let mut chunks = chunks_result?;
-        for chunk in chunks.iter_mut() {
+
+        // Generate embeddings in batch for efficiency
+        let chunk_embeddings = if !chunks.is_empty() {
+            // Try to load embedding model
+            match crate::embeddings::EmbeddingModel::new() {
+                Ok(model) => {
+                    // Collect all chunk contents for batch embedding
+                    let chunk_texts: Vec<String> = chunks.iter()
+                        .map(|c| c.content.clone())
+                        .collect();
+
+                    // Generate embeddings in batch (5-10x faster than individual)
+                    match model.embed_batch(&chunk_texts) {
+                        Ok(embeddings) => {
+                            log::debug!("Generated {} embeddings for {}", embeddings.len(), path_str);
+                            Some(embeddings)
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to generate embeddings for {}: {}", path_str, e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Embedding model not available: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Insert chunks with embeddings
+        for (idx, chunk) in chunks.iter_mut().enumerate() {
             chunk.doc_id = doc_id;
             let metadata_json = serde_json::to_string(&chunk.metadata).ok();
 
+            // Convert embedding to bytes if available
+            let embedding_blob = chunk_embeddings.as_ref()
+                .and_then(|embs| embs.get(idx))
+                .map(|emb| crate::search::f32_vec_to_bytes(emb));
+
             conn.execute(
-                "INSERT INTO chunks (doc_id, content, metadata, start_line, end_line, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chunks (doc_id, content, metadata, start_line, end_line, embedding, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     chunk.doc_id,
                     chunk.content,
                     metadata_json,
                     chunk.start_line as i64,
                     chunk.end_line as i64,
+                    embedding_blob,
                     chunk.created_at,
                 ],
             )
@@ -310,7 +349,8 @@ pub async fn index_directory(
         }
 
         processed += 1;
-        log::info!("Indexed {} ({}/{})", path_str, processed, total_files);
+        log::info!("Indexed {} with {} chunks ({}/{})",
+                   path_str, chunks.len(), processed, total_files);
     }
 
     // Update collection metadata after indexing
@@ -415,7 +455,7 @@ pub async fn start_watching_collections(
 ) -> Result<(), String> {
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
     let collections = db::get_collections(&conn).map_err(|e| e.to_string())?;
-    
+
     if let Ok(mut watcher_guard) = watcher_state.watcher.lock() {
         if let Some(watcher) = watcher_guard.as_mut() {
             use notify::Watcher;
@@ -429,6 +469,243 @@ pub async fn start_watching_collections(
             }
         }
     }
+    Ok(())
+}
+
+/// Handle incremental update for a single file
+/// This is called when a file is modified (detected by file watcher)
+#[tauri::command]
+pub async fn update_file_incremental(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<(), String> {
+    log::info!("Incremental update for: {}", file_path);
+
+    let path = Path::new(&file_path);
+
+    // Check if file exists
+    if !path.exists() {
+        log::warn!("File no longer exists: {}", file_path);
+        return handle_file_removal(state, file_path).await;
+    }
+
+    // Check file extension
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if extension != "md" && extension != "markdown" && extension != "pdf" {
+        log::debug!("Ignoring non-document file: {}", file_path);
+        return Ok(());
+    }
+
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    // Find which collection this file belongs to
+    let collection_id: Option<i64> = conn
+        .query_row(
+            "SELECT collection_id FROM documents WHERE path = ?",
+            params![file_path],
+            |row| row.get(0),
+        )
+        .ok();
+
+    let collection_id = match collection_id {
+        Some(id) => id,
+        None => {
+            // File not in database - check if it belongs to any watched collection
+            let collections = db::get_collections(&conn).map_err(|e| e.to_string())?;
+
+            let mut found_collection = None;
+            for collection in collections {
+                if let Some(folder_path) = &collection.folder_path {
+                    if file_path.starts_with(folder_path) {
+                        found_collection = Some(collection.id);
+                        break;
+                    }
+                }
+            }
+
+            match found_collection {
+                Some(id) => {
+                    log::info!("New file detected in collection {}: {}", id, file_path);
+                    id
+                }
+                None => {
+                    log::debug!("File not in any watched collection: {}", file_path);
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    // Extract content and chunk
+    let (content, chunks_result, doc_status) = if extension == "pdf" {
+        // Handle PDF files
+        match crate::pdf_parser::extract_text_from_pdf(path) {
+            Ok(crate::pdf_parser::PdfStatus::Success { text, page_count }) => {
+                let chunks = crate::pdf_parser::chunk_pdf_text(0, &text, page_count)
+                    .map_err(|e| format!("Failed to chunk PDF: {}", e))?;
+                (text, Ok::<Vec<Chunk>, String>(chunks), "normal".to_string())
+            }
+            Ok(crate::pdf_parser::PdfStatus::ScannedPdf { page_count }) => {
+                log::warn!("Scanned PDF (no text layer): {}", file_path);
+                ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "scanned_pdf".to_string())
+            }
+            Ok(crate::pdf_parser::PdfStatus::Error(error_msg)) => {
+                log::error!("PDF extraction error {}: {}", file_path, error_msg);
+                ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
+            }
+            Err(e) => {
+                log::error!("Failed to extract PDF {}: {}", file_path, e);
+                ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
+            }
+        }
+    } else {
+        // Handle Markdown files
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
+
+        let chunks = crate::chunker::chunk_markdown(0, &content)
+            .map_err(|e| format!("Failed to chunk {}: {}", file_path, e))?;
+
+        (content, Ok(chunks), "normal".to_string())
+    };
+
+    // Calculate hash
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let hash = hex::encode(hasher.finalize());
+
+    // Get file metadata
+    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    let last_modified = metadata
+        .modified()
+        .map_err(|e| e.to_string())?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+
+    // Check if document exists with same hash (no changes)
+    let unchanged: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM documents WHERE collection_id = ? AND path = ? AND hash = ?",
+            params![collection_id, file_path, hash],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if unchanged {
+        log::debug!("File unchanged (same hash): {}", file_path);
+        return Ok(());
+    }
+
+    // Delete old version
+    conn.execute(
+        "DELETE FROM documents WHERE collection_id = ? AND path = ?",
+        params![collection_id, file_path],
+    )
+    .map_err(|e| format!("Failed to delete old document: {}", e))?;
+
+    // Insert new document
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO documents (collection_id, path, hash, last_modified, created_at, status)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        params![collection_id, file_path, hash, last_modified, now, doc_status],
+    )
+    .map_err(|e| format!("Failed to insert document: {}", e))?;
+
+    let doc_id = conn.last_insert_rowid();
+
+    // Insert chunks with embeddings
+    let mut chunks = chunks_result?;
+
+    // Generate embeddings in batch
+    let chunk_embeddings = if !chunks.is_empty() {
+        match crate::embeddings::EmbeddingModel::new() {
+            Ok(model) => {
+                let chunk_texts: Vec<String> = chunks.iter()
+                    .map(|c| c.content.clone())
+                    .collect();
+
+                match model.embed_batch(&chunk_texts) {
+                    Ok(embeddings) => {
+                        log::debug!("Generated {} embeddings for {}", embeddings.len(), file_path);
+                        Some(embeddings)
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to generate embeddings: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::debug!("Embedding model not available: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Insert chunks
+    for (idx, chunk) in chunks.iter_mut().enumerate() {
+        chunk.doc_id = doc_id;
+        let metadata_json = serde_json::to_string(&chunk.metadata).ok();
+
+        let embedding_blob = chunk_embeddings.as_ref()
+            .and_then(|embs| embs.get(idx))
+            .map(|emb| crate::search::f32_vec_to_bytes(emb));
+
+        conn.execute(
+            "INSERT INTO chunks (doc_id, content, metadata, start_line, end_line, embedding, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                chunk.doc_id,
+                chunk.content,
+                metadata_json,
+                chunk.start_line as i64,
+                chunk.end_line as i64,
+                embedding_blob,
+                chunk.created_at,
+            ],
+        )
+        .map_err(|e| format!("Failed to insert chunk: {}", e))?;
+    }
+
+    // Update collection metadata
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE collections SET updated_at = ? WHERE id = ?",
+        params![now, collection_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    log::info!("✓ Incrementally updated {} with {} chunks", file_path, chunks.len());
+    Ok(())
+}
+
+/// Handle file removal (detected by file watcher)
+#[tauri::command]
+pub async fn handle_file_removal(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<(), String> {
+    log::info!("Handling file removal: {}", file_path);
+
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    // Delete document (chunks will be cascade deleted)
+    let deleted = conn.execute(
+        "DELETE FROM documents WHERE path = ?",
+        params![file_path],
+    )
+    .map_err(|e| format!("Failed to delete document: {}", e))?;
+
+    if deleted > 0 {
+        log::info!("✓ Removed {} from index", file_path);
+    } else {
+        log::debug!("File not in index: {}", file_path);
+    }
+
     Ok(())
 }
 

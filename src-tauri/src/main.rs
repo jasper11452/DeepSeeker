@@ -25,6 +25,8 @@ fn main() {
             commands::open_file_at_line,
             commands::check_model_status,
             commands::start_watching_collections,
+            commands::update_file_incremental,
+            commands::handle_file_removal,
             commands::log_error,
             commands::get_error_logs,
             commands::clear_error_logs,

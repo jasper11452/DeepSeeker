@@ -1,0 +1,463 @@
+================================================================================
+DEEPSEEKER CODEBASE EXPLORATION - COMPLETE OVERVIEW
+================================================================================
+
+I've conducted a thorough exploration of the deepseeker codebase and generated
+comprehensive documentation for you. Here's what you need to know:
+
+================================================================================
+1. PROJECT STATUS
+================================================================================
+
+CURRENT STATE: Phase 1 Complete ✅
+- Core search engine fully implemented (30+ unit tests passing)
+- Hybrid search (BM25 + Vector) working and optimized
+- Markdown AST-based chunking with structure awareness
+- ONNX/BAAI/bge-m3 embeddings integrated
+- SQLite FTS5 + sqlite-vec fully operational
+- Frontend UI implemented with React/TypeScript
+
+ARCHITECTURE: Production-ready hybrid search platform
+- Rust backend (Tauri v2 desktop app)
+- React/TypeScript frontend
+- ~100KB of tested Rust code
+- ~1984 lines of new code in Phase 1 alone
+
+================================================================================
+2. WHAT'S ALREADY IMPLEMENTED (DELIVERED)
+================================================================================
+
+✅ MARKDOWN PARSING WITH AST (chunker.rs - 20KB)
+   - Uses pulldown-cmark for AST parsing
+   - Never splits code blocks (atomic preservation)
+   - Tracks header hierarchy (H1 > H2 > H3 > H4...)
+   - 10 complex unit tests covering edge cases
+
+✅ DATABASE SCHEMA (db.rs - 16KB)
+   - SQLite with FTS5 (full-text search)
+   - sqlite-vec extension for vector search (KNN)
+   - Automatic trigger-based synchronization
+   - Cascade deletion for referential integrity
+   - Ghost data cleanup (orphaned documents)
+   - 6 comprehensive database tests
+
+✅ VECTOR EMBEDDINGS (embeddings.rs - 8.1KB)
+   - BAAI/bge-m3 ONNX model (1024-dim vectors)
+   - Batch embedding support (but not yet optimized)
+   - Tokenization via HuggingFace tokenizers
+   - Vector normalization & cosine similarity
+   - 3 unit tests for vector operations
+
+✅ HYBRID SEARCH (search.rs - 13KB)
+   - BM25 keyword search via FTS5 (0.3 weight)
+   - Vector KNN search via sqlite-vec (0.7 weight)
+   - Weighted score combination: 0.7*vec + 0.3*bm25
+   - Graceful fallback to BM25 if embeddings unavailable
+   - 10-100x faster KNN search with sqlite-vec
+   - 6 unit tests covering all scenarios
+
+✅ FILE INDEXING (commands.rs - 15KB)
+   - Recursive directory walking (MD + PDF)
+   - SHA256 deduplication (skip unchanged files)
+   - PDF text extraction & scanned detection
+   - Progress tracking for long operations
+   - Collection management (CRUD)
+
+✅ PDF SUPPORT (pdf_parser.rs - 5KB)
+   - Text layer extraction
+   - Scanned PDF detection (heuristic: < 50 chars/page)
+   - Page count estimation
+   - Simple paragraph-based chunking
+
+✅ FILE WATCHING INFRASTRUCTURE (watcher.rs - 2.2KB)
+   - notify crate integration
+   - Real-time file change detection
+   - 2-second debounce
+   - Events emitted to frontend (partial integration)
+
+================================================================================
+3. WHAT NEEDS TO BE BUILT (TODO)
+================================================================================
+
+PRIORITY 1 - CRITICAL IMPROVEMENTS:
+
+1. INCREMENTAL INDEXING WITH SMART UPDATES
+   Status: File watching exists but not connected to indexing
+   
+   What's needed:
+   - Connect watcher.rs events to index_directory()
+   - Detect modified chunks via hash
+   - Update embeddings only for changed chunks
+   - Avoid full re-index on every file change
+   - Expected speedup: 5-10x for large collections
+   
+   Where to implement:
+   - Enhance commands.rs::index_directory()
+   - Create new function: commands.rs::incremental_index()
+   - Add hash-based change detection
+   - Implement chunk-level update logic
+
+2. BATCH EMBEDDING OPTIMIZATION
+   Status: Currently embedding chunks one-at-a-time
+   
+   What's needed:
+   - Queue chunks during indexing
+   - Process in batches (50-100 chunks per batch)
+   - Use existing embeddings.rs::embed_batch()
+   - Expected speedup: 5-10x embedding throughput
+   
+   Where to implement:
+   - Modify commands.rs::index_directory() lines 291-312
+   - Replace single embed() calls with batch queuing
+   - Call embed_batch() with buffered chunks
+
+3. ERROR HANDLING & RESILIENCE
+   - Granular error types (not just String)
+   - Retry logic for transient failures
+   - User-facing error messages
+   - Comprehensive logging
+
+PRIORITY 2 - ENHANCEMENTS:
+
+4. ADVANCED MARKDOWN FEATURES
+   - Better table parsing
+   - LaTeX math support ($...$)
+   - Callout/admonition detection
+   - Metadata extraction (YAML frontmatter)
+
+5. PERFORMANCE BENCHMARKING
+   - Implement criterion.rs benchmarks
+   - Profile memory usage
+   - Optimize query latency
+   - Run on 100k+ chunk datasets
+
+6. PDF IMPROVEMENTS
+   - OCR support for scanned PDFs (Tesseract)
+   - Table extraction
+   - Layout-aware chunking
+
+PRIORITY 3 - POLISH:
+
+7. CONFIGURATION SYSTEM
+   - Config file support (TOML/YAML)
+   - User preferences
+   - Model selection
+
+8. UX IMPROVEMENTS
+   - Real-time progress updates
+   - Search suggestions
+   - Result highlighting
+   - Saved searches
+
+9. TESTING INFRASTRUCTURE
+   - Integration tests
+   - End-to-end testing
+   - CI/CD pipeline
+
+================================================================================
+4. KEY TECHNICAL DETAILS
+================================================================================
+
+HYBRID SEARCH ALGORITHM:
+┌─────────────────────────────────────────────────────┐
+│ User Query: "async python"                          │
+├─────────────────────────────────────────────────────┤
+│ 1. Generate query embedding (1024-dim BAAI/bge-m3)  │
+│                                                     │
+│ 2. BM25 Search (FTS5):                              │
+│    SELECT * FROM chunks_fts MATCH "async python"   │
+│    → Normalize to [0,1]: 1/(1+|rank|)              │
+│    → Get 3x candidates                              │
+│                                                     │
+│ 3. Vector Search (sqlite-vec):                      │
+│    vec_distance_cosine(query_emb, chunk_emb)       │
+│    → Convert distance to similarity                 │
+│    → Get 3x candidates                              │
+│                                                     │
+│ 4. Merge & Rank:                                    │
+│    hybrid_score = 0.7*vec_score + 0.3*bm25_score   │
+│                                                     │
+│ 5. Sort by hybrid_score, return top-k              │
+└─────────────────────────────────────────────────────┘
+
+DATABASE SCHEMA:
+- collections: {id, name, folder_path, file_count, last_sync}
+- documents: {id, collection_id, path, hash, last_modified, status}
+- chunks: {id, doc_id, content, metadata JSON, embedding BLOB, start_line, end_line}
+- chunks_fts: FTS5 virtual table (indexed: content, metadata)
+- chunks_vec: sqlite-vec virtual table (float[1024] vectors)
+
+Triggers keep FTS5 and vector indices automatically in sync.
+
+MARKDOWN CHUNKING:
+- AST-based parsing using pulldown-cmark
+- Code blocks stored as atomic units (NEVER SPLIT)
+- Header hierarchy preserved (["H1", "H2", "H3", ...])
+- Text chunks max size: 1000 characters
+- Chunk metadata: type ("code"|"text"), language, headers, line numbers
+
+VECTOR STORAGE:
+- Model: BAAI/bge-m3 (multilingual, 1024-dim output)
+- Storage: sqlite-vec extension with KNN search
+- Distance metric: Cosine distance
+- Model location: ~/.deepseeker/models/bge-m3/{model.onnx, tokenizer.json}
+
+================================================================================
+5. FILE STRUCTURE & KEY LOCATIONS
+================================================================================
+
+CORE RUST FILES (src-tauri/src/):
+
+search.rs (13KB) - Hybrid search algorithm
+├─ search_hybrid() - Main entry point
+├─ hybrid_search_full() - BM25 + Vector search
+├─ bm25_search_only() - Fallback keyword search
+└─ Weight constants: BM25=0.3, VECTOR=0.7
+
+chunker.rs (20KB) - Markdown AST parser
+├─ MarkdownChunker::chunk() - Main parsing loop
+├─ Header tracking (header_stack)
+├─ Code block preservation (never split)
+└─ 10 unit tests
+
+embeddings.rs (8.1KB) - ONNX model wrapper
+├─ EmbeddingModel::new() - Load BAAI/bge-m3
+├─ embed() - Single text embedding
+├─ embed_batch() - Multiple texts (already exists!)
+└─ Vector normalization & cosine similarity
+
+db.rs (16KB) - Database schema & operations
+├─ init_database() - Setup tables & extensions
+├─ Schema creation (collections, documents, chunks)
+├─ FTS5 virtual table with triggers
+├─ sqlite-vec virtual table with triggers
+└─ Ghost data cleanup
+
+commands.rs (15KB) - Tauri IPC handlers
+├─ create_collection()
+├─ index_directory() - Main indexing logic (NEEDS OPTIMIZATION)
+├─ full_reindex()
+└─ search()
+
+pdf_parser.rs (5KB) - PDF support
+├─ extract_text_from_pdf()
+├─ is_scanned_pdf() - Heuristic detection
+└─ chunk_pdf_text() - Simple paragraph chunking
+
+watcher.rs (2.2KB) - File watching (NEEDS INTEGRATION)
+├─ init_watcher() - Setup notify watcher
+└─ Event handlers (create, modify, delete)
+
+FRONTEND FILES (src/components/):
+- SearchInterface.tsx - Search UI
+- CollectionManager.tsx - Collection CRUD
+- ValidationTest.tsx - Phase 1 test component
+- ModelManager.tsx - Model status check
+
+TEST DATA:
+- test-data/validation_test.md - 210 lines, 5-level nesting
+- tests/fixtures/sample_readme.md - Real-world test data
+
+DOCUMENTATION:
+- README.md - Project overview
+- PHASE1_SUMMARY.md - Detailed completion report
+- performance_test_plan.md - Benchmarking strategy
+- CODEBASE_OVERVIEW.md - Full technical documentation (generated)
+- IMPLEMENTATION_REFERENCE.md - Code location reference (generated)
+
+================================================================================
+6. GENERATED DOCUMENTATION
+================================================================================
+
+Two comprehensive documents have been created for you:
+
+1. CODEBASE_OVERVIEW.md (752 lines)
+   └─ Complete technical overview with:
+      • Project structure
+      • All implementations with code details
+      • Database schema documentation
+      • Technology stack summary
+      • Implementation status matrix
+      • What's been done vs what needs building
+      • Known limitations
+      • Development guidance
+
+2. IMPLEMENTATION_REFERENCE.md (551 lines)
+   └─ Quick reference with:
+      • File sizes & complexity
+      • Key implementation locations (line numbers)
+      • Code snippets for core algorithms
+      • Test coverage summary
+      • Data flow diagrams
+      • Build & test commands
+      • Priority reading order
+
+Both files saved to /home/user/deepseeker/
+
+================================================================================
+7. QUICK START FOR IMPLEMENTATION
+================================================================================
+
+Priority order for next work:
+
+1. READ THESE FILES FIRST:
+   - IMPLEMENTATION_REFERENCE.md (quick reference)
+   - src-tauri/src/search.rs (hybrid algorithm - 70 lines core logic)
+   - src-tauri/src/chunker.rs (markdown parsing - 120 lines core)
+
+2. UNDERSTAND THE FLOWS:
+   - Indexing flow: commands.rs lines 171-350
+   - Search flow: search.rs lines 18-260
+   - Chunking flow: chunker.rs lines 48-169
+
+3. IMMEDIATE NEXT STEPS (Priority 1):
+
+   A) BATCH EMBEDDING OPTIMIZATION (1-2 days)
+      Modify: src-tauri/src/commands.rs
+      Task: Queue chunks and use embed_batch() instead of single embed()
+      Expected: 5-10x speedup for indexing
+      Impact: High - bottleneck for large collections
+
+   B) INCREMENTAL INDEXING (2-3 days)
+      Modify: src-tauri/src/commands.rs + watcher.rs
+      Task: Connect file watcher to index_directory()
+      Task: Add hash-based change detection at chunk level
+      Expected: 5-10x speedup for updates
+      Impact: High - enables real-time indexing
+
+   C) ERROR HANDLING (1-2 days)
+      Modify: All modules
+      Task: Use proper error types instead of String
+      Task: Add retry logic
+      Impact: Medium - reliability improvement
+
+4. TESTING (ongoing):
+   cd src-tauri && cargo test --lib
+   Available test count: 30+
+   Coverage: Database, Chunking, Embeddings, Search
+   Needs: Commands, Watcher, PDF parser integration tests
+
+================================================================================
+8. KEY METRICS & TARGETS
+================================================================================
+
+CURRENT PERFORMANCE (Phase 1):
+- Indexing: Unknown (not benchmarked)
+- Search latency: < 200ms P95 (target)
+- Vector KNN: 10-100x faster with sqlite-vec
+- Data scale: Designed for 100k+ chunks
+
+OPTIMIZATION CHECKLIST:
+Database:
+  ✅ WAL mode for concurrency
+  ✅ FTS5 with porter tokenizer
+  ✅ sqlite-vec for KNN
+  ❌ Connection pooling (not needed for single-app)
+  ❌ Query result caching (future optimization)
+
+Vector Search:
+  ❌ Batch embedding (BLOCKING - needed now!)
+  ❌ Vector quantization (reduce 1024 to 768 dims)
+  ❌ Approximate KNN (LSH)
+
+Application:
+  ❌ Result pagination
+  ❌ Lazy loading
+  ❌ Request deduplication
+
+================================================================================
+9. DEPENDENCIES & TOOLING
+================================================================================
+
+RUST BACKEND:
+- rusqlite 0.32 (SQLite)
+- sqlite-vec 0.1 (Vector KNN)
+- ort 2.0.0-rc.10 (ONNX Runtime)
+- pulldown-cmark 0.12 (Markdown AST)
+- notify 6.1 (File watching)
+- tauri 2.0 (Desktop framework)
+
+FRONTEND:
+- React 18.3
+- TypeScript 5.6
+- @tauri-apps/api (Tauri IPC)
+- @tanstack/react-query (State management)
+- Tailwind CSS
+
+TESTING:
+- cargo test (built-in)
+- tempfile (test fixtures)
+- criterion (for benchmarks - not yet used)
+
+BUILD TOOLS:
+npm run tauri dev - Development mode
+npm run tauri build - Production build
+
+================================================================================
+10. COMMON PITFALLS & LESSONS LEARNED
+================================================================================
+
+WHAT WORKS WELL:
+✅ Structure-aware chunking with header hierarchy
+✅ Code block preservation (atomic chunks)
+✅ FTS5 + sqlite-vec combination
+✅ Hybrid weighting (0.7 vector + 0.3 BM25)
+✅ Cascade delete for data integrity
+✅ Automatic trigger-based synchronization
+
+KNOWN ISSUES:
+⚠️ Single-text embeddings (batch not used)
+⚠️ Incremental indexing not connected
+⚠️ No query caching
+⚠️ PDF scanned detection is heuristic-based
+⚠️ Build requires GTK libraries (Tauri dependency)
+
+BOTTLENECKS (for optimization):
+1. Embedding generation (single-text → should be batch)
+2. Full re-index on file changes (should be incremental)
+3. No caching (identical queries re-computed)
+4. Vector storage size (1024 dims → could be 768)
+
+================================================================================
+11. NEXT STEPS & RECOMMENDATIONS
+================================================================================
+
+IMMEDIATE (This week):
+1. Read IMPLEMENTATION_REFERENCE.md thoroughly
+2. Study the hybrid search algorithm (search.rs)
+3. Understand the chunking algorithm (chunker.rs)
+4. Review database schema (db.rs)
+
+SHORT TERM (Next 1-2 weeks):
+1. Implement batch embedding optimization
+   └─ Expected ROI: 5-10x speedup, 1-2 days work
+2. Connect file watcher to incremental indexing
+   └─ Expected ROI: 5-10x speedup for updates, 2-3 days work
+3. Add error handling & retry logic
+   └─ Expected ROI: Better reliability, 1-2 days work
+
+MEDIUM TERM (Next 1 month):
+1. Performance benchmarking (criterion.rs)
+2. Advanced Markdown features (tables, LaTeX, metadata)
+3. PDF improvements (layout awareness)
+4. Configuration system
+
+LONG TERM (Next 3+ months):
+1. Multi-modal search (image + text)
+2. Query expansion (synonyms)
+3. Ranking personalization
+4. Plugin system
+5. VSCode extension
+6. Distributed indexing (1M+ chunks)
+
+================================================================================
+END OF SUMMARY
+================================================================================
+
+All documentation has been saved to:
+- /home/user/deepseeker/CODEBASE_OVERVIEW.md (752 lines)
+- /home/user/deepseeker/IMPLEMENTATION_REFERENCE.md (551 lines)
+
+These documents are comprehensive enough to inform detailed implementation plans
+for the remaining work described in your specification.
+
