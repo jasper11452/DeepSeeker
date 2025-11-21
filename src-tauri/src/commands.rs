@@ -1,6 +1,7 @@
 use crate::db;
 use crate::models::*;
 use crate::AppState;
+use crate::progress::ProgressTracker;
 use anyhow::Result;
 use rusqlite::params;
 use serde::{Serialize, Deserialize};
@@ -147,6 +148,7 @@ pub async fn detect_ghost_files(state: State<'_, AppState>) -> Result<Vec<String
 #[tauri::command]
 pub async fn full_reindex(
     state: State<'_, AppState>,
+    tracker: State<'_, ProgressTracker>,
     collection_id: i64,
     directory_path: String,
 ) -> Result<IndexProgress, String> {
@@ -173,12 +175,13 @@ pub async fn full_reindex(
 
     // Re-run indexing
     drop(conn); // Release connection before calling index_directory
-    index_directory(state, collection_id, directory_path).await
+    index_directory(state, tracker, collection_id, directory_path).await
 }
 
 #[tauri::command]
 pub async fn index_directory(
     state: State<'_, AppState>,
+    tracker: State<'_, ProgressTracker>,
     collection_id: i64,
     directory_path: String,
 ) -> Result<IndexProgress, String> {
@@ -212,6 +215,15 @@ pub async fn index_directory(
     let total_files = files.len();
     let processed = Arc::new(Mutex::new(0));
     let processed_clone = Arc::clone(&processed);
+
+    // Initialize progress
+    tracker.update(collection_id, IndexProgress {
+        total_files,
+        processed_files: 0,
+        current_file: None,
+        errors: Vec::new(),
+        status: "indexing".to_string(),
+    });
 
     // Create channel for chunk jobs
     let (tx, rx) = mpsc::channel::<ChunkJob>();
@@ -280,29 +292,59 @@ pub async fn index_directory(
         let path_str = path.to_string_lossy().to_string();
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
+        // Update current file in progress
+        tracker.update_current_file(collection_id, Some(path_str.clone()));
+
         // Determine file type and extract content
         let (content, chunks_result, doc_status) = if extension == "pdf" {
-            // Handle PDF files
-            match crate::pdf_parser::extract_text_from_pdf(path) {
+            // Handle PDF files with OCR progress tracking
+            let tracker_clone = tracker.inner().clone();
+            let path_str_clone = path_str.clone();
+            let coll_id = collection_id;
+
+            let progress_callback = Box::new(move |current_page: usize, total_pages: usize| {
+                let status_msg = format!("OCR 处理中: {} (第 {}/{} 页)",
+                    path_str_clone.split('/').last().unwrap_or(&path_str_clone),
+                    current_page,
+                    total_pages
+                );
+                tracker_clone.update_current_file(coll_id, Some(status_msg));
+            });
+
+            match crate::pdf_parser::extract_text_from_pdf_with_progress(path, Some(progress_callback)) {
                 Ok(crate::pdf_parser::PdfStatus::Success { text, page_count }) => {
                     let chunks = crate::pdf_parser::chunk_pdf_text(0, &text, page_count)
                         .map_err(|e| format!("Failed to chunk PDF: {}", e))?;
                     (text, Ok::<Vec<Chunk>, String>(chunks), "normal".to_string())
                 }
-                Ok(crate::pdf_parser::PdfStatus::ScannedPdf { page_count }) => {
-                    log::warn!(
-                        "⚠️ Scanned PDF (Skipped) - {} pages, no text layer: {}",
+                Ok(crate::pdf_parser::PdfStatus::OcrSuccess { text, page_count }) => {
+                    log::info!(
+                        "✓ OCR Success - Extracted {} chars from {} pages: {}",
+                        text.len(),
                         page_count,
                         path_str
                     );
+                    let chunks = crate::pdf_parser::chunk_pdf_text(0, &text, page_count)
+                        .map_err(|e| format!("Failed to chunk PDF: {}", e))?;
+                    (text, Ok::<Vec<Chunk>, String>(chunks), "ocr".to_string())
+                }
+                Ok(crate::pdf_parser::PdfStatus::ScannedPdf { page_count }) => {
+                    log::warn!(
+                        "⚠️ Scanned PDF (OCR Failed) - {} pages: {}",
+                        page_count,
+                        path_str
+                    );
+                    tracker.add_error(collection_id, format!("OCR failed for: {}", path_str));
                     ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "scanned_pdf".to_string())
                 }
                 Ok(crate::pdf_parser::PdfStatus::Error(error_msg)) => {
                     log::error!("PDF extraction error {}: {}", path_str, error_msg);
+                    tracker.add_error(collection_id, format!("PDF error: {}", path_str));
                     ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
                 }
                 Err(e) => {
                     log::error!("Failed to extract PDF {}: {}", path_str, e);
+                    tracker.add_error(collection_id, format!("Failed: {}", path_str));
                     ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
                 }
             }
@@ -391,8 +433,14 @@ pub async fn index_directory(
         let current_processed = *p;
         drop(p);
 
+        // Update progress tracker
+        tracker.increment_processed(collection_id);
+
         log::info!("Queued {} ({}/{})", path_str, current_processed, total_files);
     }
+
+    // Clear current file after processing all files
+    tracker.update_current_file(collection_id, None);
 
     // Close channel to signal consumer we're done
     drop(tx);
@@ -422,13 +470,24 @@ pub async fn index_directory(
     log::info!("✓ Collection {} indexed: {}/{} files processed",
                collection_id, final_processed, total_files);
 
-    Ok(IndexProgress {
+    // Get final progress from tracker (includes errors)
+    let final_progress = tracker.get(collection_id).unwrap_or(IndexProgress {
         total_files,
         processed_files: final_processed,
         current_file: None,
         errors: Vec::new(),
         status: "completed".to_string(),
-    })
+    });
+
+    // Update status to completed
+    let completed_progress = IndexProgress {
+        status: "completed".to_string(),
+        ..final_progress
+    };
+
+    tracker.update(collection_id, completed_progress.clone());
+
+    Ok(completed_progress)
 }
 
 /// Process a batch of chunks: generate embeddings and insert into database
@@ -1134,4 +1193,20 @@ pub async fn get_chunk_context(
 
     log::info!("Returning {} chunks for context", result.len());
     Ok(result)
+}
+
+/// Get indexing progress for a collection
+#[tauri::command]
+pub async fn get_indexing_progress(
+    tracker: State<'_, ProgressTracker>,
+    collection_id: i64,
+) -> Result<IndexProgress, String> {
+    // Return the progress or a default idle state
+    Ok(tracker.get(collection_id).unwrap_or(IndexProgress {
+        total_files: 0,
+        processed_files: 0,
+        current_file: None,
+        errors: Vec::new(),
+        status: "idle".to_string(),
+    }))
 }

@@ -42,6 +42,11 @@ hex = "0.4"
 pdf-extract = "0.7"
 notify = "6.1"
 
+# OCR support for scanned PDFs
+leptess = "0.14"  # Tesseract OCR Rust binding
+image = "0.25"    # Image processing for PDF to image conversion
+pdfium-render = "0.8"  # PDF to image conversion using PDFium
+
 # Utilities
 chrono = "0.4"
 log = "0.4"
