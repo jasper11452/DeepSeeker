@@ -1052,3 +1052,86 @@ pub async fn get_performance_stats(state: State<'_, AppState>) -> Result<Perform
         memory_usage_mb: None,
     })
 }
+
+/// Get adjacent chunks for context preview
+/// Fetches chunks before and after the target chunk from the same document
+#[tauri::command]
+pub async fn get_chunk_context(
+    state: State<'_, AppState>,
+    doc_id: i64,
+    start_line: i64,
+    context_size: Option<i64>,
+) -> Result<Vec<SearchResult>, String> {
+    let context_size = context_size.unwrap_or(5);
+    log::info!("Fetching chunk context for doc_id={}, start_line={}, context_size={}",
+               doc_id, start_line, context_size);
+
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    // Get the target chunk and its neighbors
+    // We fetch chunks from the same document, ordered by start_line
+    // Get N chunks before and N chunks after the target chunk
+    let sql = "
+        SELECT
+            c.id as chunk_id,
+            c.doc_id,
+            d.path as document_path,
+            COALESCE(d.status, 'normal') as document_status,
+            c.content,
+            c.metadata,
+            c.start_line,
+            c.end_line
+        FROM chunks c
+        JOIN documents d ON c.doc_id = d.id
+        WHERE c.doc_id = ?
+        ORDER BY c.start_line
+    ";
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+
+    let all_chunks: Vec<SearchResult> = stmt
+        .query_map(params![doc_id], |row| {
+            let metadata_str: Option<String> = row.get(5)?;
+            let metadata: Option<ChunkMetadata> =
+                metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
+            Ok(SearchResult {
+                chunk_id: row.get(0)?,
+                doc_id: row.get(1)?,
+                document_path: row.get(2)?,
+                document_status: row.get(3)?,
+                content: row.get(4)?,
+                metadata,
+                score: 0.0,
+                start_line: row.get::<_, i64>(6)? as usize,
+                end_line: row.get::<_, i64>(7)? as usize,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    // Find the index of the target chunk
+    let target_index = all_chunks
+        .iter()
+        .position(|chunk| chunk.start_line == start_line as usize);
+
+    let result = match target_index {
+        Some(idx) => {
+            // Calculate the range of chunks to return
+            let start = idx.saturating_sub(context_size as usize);
+            let end = (idx + context_size as usize + 1).min(all_chunks.len());
+
+            all_chunks[start..end].to_vec()
+        }
+        None => {
+            // If we can't find the exact chunk, return all chunks
+            // This handles edge cases where start_line might not match exactly
+            log::warn!("Could not find target chunk at start_line={}, returning all chunks", start_line);
+            all_chunks
+        }
+    };
+
+    log::info!("Returning {} chunks for context", result.len());
+    Ok(result)
+}
