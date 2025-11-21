@@ -2,6 +2,7 @@
   "productName": "DeepSeeker",
   "version": "1.0.0",
   "identifier": "com.deepseeker.app",
+  "homepage": "https://github.com/deepseeker/deepseeker",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -27,6 +28,46 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "publisher": "DeepSeeker Team",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "macOS": {
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null
+    },
+    "linux": {
+      "deb": {
+        "depends": [],
+        "desktopTemplate": null
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "",
+      "endpoints": [],
+      "dialog": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
