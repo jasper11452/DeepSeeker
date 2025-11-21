@@ -10,6 +10,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::create_collection,
             commands::list_collections,
@@ -24,6 +27,10 @@ fn main() {
             commands::start_watching_collections,
             commands::update_file_incremental,
             commands::handle_file_removal,
+            commands::log_error,
+            commands::get_error_logs,
+            commands::clear_error_logs,
+            commands::get_performance_stats,
         ])
         .setup(|app| {
             // Initialize database on startup

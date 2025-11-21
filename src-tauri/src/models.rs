@@ -68,4 +68,8 @@ pub struct IndexProgress {
     pub total_files: usize,
     pub processed_files: usize,
     pub current_file: Option<String>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub status: String, // 'idle', 'indexing', 'completed', 'error'
 }

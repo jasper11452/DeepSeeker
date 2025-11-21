@@ -8,6 +8,13 @@ import CreateCollectionDialog from "./components/CreateCollectionDialog";
 import ModelManager from "./components/ModelManager";
 import { ValidationTest } from "./components/ValidationTest";
 import Settings from "./components/Settings";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { UpdateChecker } from "./components/UpdateChecker";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { ErrorLogsPanel } from "./components/ErrorLogsPanel";
+import { PerformanceMonitor } from "./components/PerformanceMonitor";
+import { useGlobalShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useTheme } from "./contexts/ThemeContext";
 
 interface Collection {
   id: number;
@@ -25,6 +32,14 @@ function App() {
   const [isValidationMode, setIsValidationMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const queryClient = useQueryClient();
+  const { toggleTheme } = useTheme();
+
+  // Register global keyboard shortcuts
+  useGlobalShortcuts({
+    onNewCollection: () => setIsDialogOpen(true),
+    onSettings: () => setIsSettingsOpen(true),
+    onToggleTheme: toggleTheme,
+  });
 
   const { data: collections, isLoading } = useQuery<Collection[]>({
     queryKey: ["collections"],
@@ -118,9 +133,12 @@ function App() {
           >
             {isValidationMode ? 'Exit Test Mode' : 'Dev Tools'}
           </button>
+          <ThemeToggle />
+          <ShortcutsHelp />
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="p-2 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+            title="设置 (⌘,)"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -143,6 +161,7 @@ function App() {
               <button
                 onClick={handleOpenDialog}
                 className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm font-medium rounded-lg shadow-lg shadow-indigo-900/20 transition-all duration-200 flex items-center justify-center gap-2 group"
+                title="新建集合 (⌘N)"
               >
                 <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -192,6 +211,15 @@ function App() {
         onClose={() => setIsDialogOpen(false)}
         onSubmit={handleCreateCollection}
       />
+
+      <UpdateChecker />
+
+      {isSettingsOpen && (
+        <Settings onClose={() => setIsSettingsOpen(false)} />
+      )}
+
+      <ErrorLogsPanel />
+      <PerformanceMonitor />
     </div>
   );
 }
