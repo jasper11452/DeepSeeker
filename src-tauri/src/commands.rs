@@ -474,6 +474,11 @@ pub async fn start_watching_collections(
 
 /// Handle incremental update for a single file
 /// This is called when a file is modified (detected by file watcher)
+///
+/// Improvements:
+/// 1. Debounce optimization - handled by watcher.rs
+/// 2. Atomic updates - uses SQLite transactions
+/// 3. Smart Diff - reuses embeddings for unchanged chunks
 #[tauri::command]
 pub async fn update_file_incremental(
     state: State<'_, AppState>,
@@ -496,7 +501,7 @@ pub async fn update_file_incremental(
         return Ok(());
     }
 
-    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+    let mut conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
 
     // Find which collection this file belongs to
     let collection_id: Option<i64> = conn
@@ -569,7 +574,7 @@ pub async fn update_file_incremental(
         (content, Ok(chunks), "normal".to_string())
     };
 
-    // Calculate hash
+    // Calculate document hash
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     let hash = hex::encode(hasher.finalize());
@@ -597,38 +602,75 @@ pub async fn update_file_incremental(
         return Ok(());
     }
 
-    // Delete old version
-    conn.execute(
-        "DELETE FROM documents WHERE collection_id = ? AND path = ?",
-        params![collection_id, file_path],
-    )
-    .map_err(|e| format!("Failed to delete old document: {}", e))?;
-
-    // Insert new document
-    let now = chrono::Utc::now().timestamp();
-    conn.execute(
-        "INSERT INTO documents (collection_id, path, hash, last_modified, created_at, status)
-         VALUES (?, ?, ?, ?, ?, ?)",
-        params![collection_id, file_path, hash, last_modified, now, doc_status],
-    )
-    .map_err(|e| format!("Failed to insert document: {}", e))?;
-
-    let doc_id = conn.last_insert_rowid();
-
-    // Insert chunks with embeddings
     let mut chunks = chunks_result?;
 
-    // Generate embeddings in batch
-    let chunk_embeddings = if !chunks.is_empty() {
+    // Smart Diff: Retrieve old chunks to reuse embeddings for unchanged content
+    let old_doc_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM documents WHERE collection_id = ? AND path = ?",
+            params![collection_id, file_path],
+            |row| row.get(0),
+        )
+        .ok();
+
+    // Map from chunk content hash to embedding
+    let mut old_embeddings: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+
+    if let Some(old_id) = old_doc_id {
+        let mut stmt = conn
+            .prepare("SELECT content, embedding FROM chunks WHERE doc_id = ?")
+            .map_err(|e| e.to_string())?;
+
+        let old_chunks = stmt
+            .query_map(params![old_id], |row| {
+                let content: String = row.get(0)?;
+                let embedding: Option<Vec<u8>> = row.get(1)?;
+                Ok((content, embedding))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for chunk_result in old_chunks {
+            if let Ok((content, Some(embedding))) = chunk_result {
+                // Calculate content hash for smart matching
+                let mut chunk_hasher = Sha256::new();
+                chunk_hasher.update(content.as_bytes());
+                let content_hash = hex::encode(chunk_hasher.finalize());
+                old_embeddings.insert(content_hash, embedding);
+            }
+        }
+
+        log::debug!("Loaded {} old embeddings for smart diff", old_embeddings.len());
+    }
+
+    // Calculate which chunks need new embeddings
+    let mut chunks_needing_embeddings = Vec::new();
+    let mut chunk_content_hashes = Vec::new();
+
+    for chunk in &chunks {
+        let mut chunk_hasher = Sha256::new();
+        chunk_hasher.update(chunk.content.as_bytes());
+        let content_hash = hex::encode(chunk_hasher.finalize());
+        chunk_content_hashes.push(content_hash.clone());
+
+        if !old_embeddings.contains_key(&content_hash) {
+            chunks_needing_embeddings.push(chunk.content.clone());
+        }
+    }
+
+    log::debug!(
+        "Smart Diff: {} chunks total, {} need new embeddings, {} reusing old",
+        chunks.len(),
+        chunks_needing_embeddings.len(),
+        chunks.len() - chunks_needing_embeddings.len()
+    );
+
+    // Generate embeddings only for new/changed chunks
+    let new_embeddings = if !chunks_needing_embeddings.is_empty() {
         match crate::embeddings::EmbeddingModel::new() {
             Ok(model) => {
-                let chunk_texts: Vec<String> = chunks.iter()
-                    .map(|c| c.content.clone())
-                    .collect();
-
-                match model.embed_batch(&chunk_texts) {
+                match model.embed_batch(&chunks_needing_embeddings) {
                     Ok(embeddings) => {
-                        log::debug!("Generated {} embeddings for {}", embeddings.len(), file_path);
+                        log::debug!("Generated {} new embeddings for {}", embeddings.len(), file_path);
                         Some(embeddings)
                     }
                     Err(e) => {
@@ -646,16 +688,57 @@ pub async fn update_file_incremental(
         None
     };
 
-    // Insert chunks
+    // Map new embeddings back to chunks
+    let mut new_embedding_idx = 0;
+    let mut chunk_embeddings = Vec::new();
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let content_hash = &chunk_content_hashes[idx];
+
+        // Try to reuse old embedding first
+        if let Some(old_embedding) = old_embeddings.get(content_hash) {
+            chunk_embeddings.push(Some(old_embedding.clone()));
+        } else if let Some(ref new_embs) = new_embeddings {
+            // Use newly generated embedding
+            if new_embedding_idx < new_embs.len() {
+                chunk_embeddings.push(Some(crate::search::f32_vec_to_bytes(&new_embs[new_embedding_idx])));
+                new_embedding_idx += 1;
+            } else {
+                chunk_embeddings.push(None);
+            }
+        } else {
+            chunk_embeddings.push(None);
+        }
+    }
+
+    // Begin atomic transaction
+    let tx = conn.transaction().map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    // Delete old document (and chunks via CASCADE)
+    tx.execute(
+        "DELETE FROM documents WHERE collection_id = ? AND path = ?",
+        params![collection_id, file_path],
+    )
+    .map_err(|e| format!("Failed to delete old document: {}", e))?;
+
+    // Insert new document
+    let now = chrono::Utc::now().timestamp();
+    tx.execute(
+        "INSERT INTO documents (collection_id, path, hash, last_modified, created_at, status)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        params![collection_id, file_path, hash, last_modified, now, doc_status],
+    )
+    .map_err(|e| format!("Failed to insert document: {}", e))?;
+
+    let doc_id = tx.last_insert_rowid();
+
+    // Insert chunks with embeddings (reused or newly generated)
     for (idx, chunk) in chunks.iter_mut().enumerate() {
         chunk.doc_id = doc_id;
         let metadata_json = serde_json::to_string(&chunk.metadata).ok();
+        let embedding_blob = chunk_embeddings.get(idx).and_then(|e| e.clone());
 
-        let embedding_blob = chunk_embeddings.as_ref()
-            .and_then(|embs| embs.get(idx))
-            .map(|emb| crate::search::f32_vec_to_bytes(emb));
-
-        conn.execute(
+        tx.execute(
             "INSERT INTO chunks (doc_id, content, metadata, start_line, end_line, embedding, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
@@ -672,14 +755,23 @@ pub async fn update_file_incremental(
     }
 
     // Update collection metadata
-    let now = chrono::Utc::now().timestamp();
-    conn.execute(
+    tx.execute(
         "UPDATE collections SET updated_at = ? WHERE id = ?",
         params![now, collection_id],
     )
     .map_err(|e| e.to_string())?;
 
-    log::info!("✓ Incrementally updated {} with {} chunks", file_path, chunks.len());
+    // Commit transaction
+    tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+    log::info!(
+        "✓ Incrementally updated {} ({} chunks, {} embeddings reused, {} new)",
+        file_path,
+        chunks.len(),
+        chunks.len() - chunks_needing_embeddings.len(),
+        chunks_needing_embeddings.len()
+    );
+
     Ok(())
 }
 
