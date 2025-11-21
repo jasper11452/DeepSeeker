@@ -335,6 +335,8 @@ pub async fn index_directory(
         total_files,
         processed_files: processed,
         current_file: None,
+        errors: Vec::new(),
+        status: "completed".to_string(),
     })
 }
 
@@ -428,4 +430,143 @@ pub async fn start_watching_collections(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ErrorLog {
+    pub message: String,
+    pub stack: Option<String>,
+    pub component_stack: Option<String>,
+    pub timestamp: String,
+}
+
+#[tauri::command]
+pub async fn log_error(app_handle: AppHandle, error: ErrorLog) -> Result<(), String> {
+    use std::io::Write;
+
+    let log_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs");
+
+    // Create logs directory if it doesn't exist
+    fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+
+    let log_file = log_dir.join("errors.log");
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .map_err(|e| e.to_string())?;
+
+    let log_entry = format!(
+        "\n[{}] {}\nStack: {}\nComponent: {}\n{}\n",
+        error.timestamp,
+        error.message,
+        error.stack.unwrap_or_else(|| "N/A".to_string()),
+        error.component_stack.unwrap_or_else(|| "N/A".to_string()),
+        "-".repeat(80)
+    );
+
+    file.write_all(log_entry.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    log::error!("Frontend error logged: {}", error.message);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_error_logs(app_handle: AppHandle) -> Result<String, String> {
+    let log_file = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs")
+        .join("errors.log");
+
+    if !log_file.exists() {
+        return Ok(String::new());
+    }
+
+    fs::read_to_string(&log_file).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_error_logs(app_handle: AppHandle) -> Result<(), String> {
+    let log_file = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs")
+        .join("errors.log");
+
+    if log_file.exists() {
+        fs::remove_file(&log_file).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PerformanceStats {
+    pub total_collections: i64,
+    pub total_documents: i64,
+    pub total_chunks: i64,
+    pub database_size_mb: f64,
+    pub index_size_mb: f64,
+    pub avg_search_time_ms: f64,
+    pub recent_searches: Vec<SearchStats>,
+    pub memory_usage_mb: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchStats {
+    pub query: String,
+    pub results_count: usize,
+    pub time_ms: u64,
+    pub timestamp: String,
+}
+
+#[tauri::command]
+pub async fn get_performance_stats(state: State<'_, AppState>) -> Result<PerformanceStats, String> {
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    // Get total collections
+    let total_collections: i64 = conn
+        .query_row("SELECT COUNT(*) FROM collections", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    // Get total documents
+    let total_documents: i64 = conn
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    // Get total chunks
+    let total_chunks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    // Get database file size
+    let db_size = std::fs::metadata(&state.db_path)
+        .map(|m| m.len() as f64 / 1_048_576.0) // Convert to MB
+        .unwrap_or(0.0);
+
+    // Estimate index size (simplified)
+    let index_size = db_size * 0.3; // Rough estimate
+
+    // Placeholder for recent searches and performance
+    let recent_searches = Vec::new();
+
+    Ok(PerformanceStats {
+        total_collections,
+        total_documents,
+        total_chunks,
+        database_size_mb: db_size,
+        index_size_mb: index_size,
+        avg_search_time_ms: 0.0,
+        recent_searches,
+        memory_usage_mb: None,
+    })
 }
