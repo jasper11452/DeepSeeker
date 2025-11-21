@@ -28,12 +28,12 @@ impl EmbeddingModel {
     ///
     /// Expected directory structure:
     /// ```text
-    /// ~/.deepseeker/models/bge-m3/
+    /// ~/.deepseeker/models/bge-m3/  (or custom path)
     /// ├── model.onnx
     /// └── tokenizer.json
     /// ```
-    pub fn new() -> Result<Self> {
-        let model_dir = Self::get_model_dir()?;
+    pub fn new(custom_path: Option<&str>) -> Result<Self> {
+        let model_dir = Self::get_model_dir(custom_path)?;
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
 
@@ -79,12 +79,17 @@ impl EmbeddingModel {
     }
 
     /// Get model directory path
-    pub fn get_model_dir() -> Result<PathBuf> {
-        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
-        let model_dir = PathBuf::from(home)
-            .join(".deepseeker")
-            .join("models")
-            .join("bge-m3");
+    /// If custom_path is provided, use it; otherwise use default ~/.deepseeker/models/bge-m3
+    pub fn get_model_dir(custom_path: Option<&str>) -> Result<PathBuf> {
+        let model_dir = if let Some(path) = custom_path {
+            PathBuf::from(path)
+        } else {
+            let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+            PathBuf::from(home)
+                .join(".deepseeker")
+                .join("models")
+                .join("bge-m3")
+        };
 
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&model_dir)?;
@@ -93,8 +98,8 @@ impl EmbeddingModel {
     }
 
     /// Check if model files exist
-    pub fn check_model_exists() -> Result<bool> {
-        let model_dir = Self::get_model_dir()?;
+    pub fn check_model_exists(custom_path: Option<&str>) -> Result<bool> {
+        let model_dir = Self::get_model_dir(custom_path)?;
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
 

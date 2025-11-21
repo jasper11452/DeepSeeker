@@ -181,15 +181,48 @@ pub async fn index_directory(
 
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
 
-    // Find all Markdown and PDF files
+    // Get indexing rules from config
+    let config = state.config_manager.get().await;
+    let indexing_rules = config.indexing_rules.clone();
+
+    // Find all Markdown and PDF files, excluding ignored paths
     let files: Vec<_> = WalkDir::new(&directory_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            let ext = e.path().extension().and_then(|s| s.to_str());
-            ext == Some("md")
+            let path = e.path();
+            let path_str = path.to_string_lossy();
+
+            // Check if file extension is supported
+            let ext = path.extension().and_then(|s| s.to_str());
+            let is_supported_ext = ext == Some("md")
                 || ext == Some("markdown")
-                || ext == Some("pdf")
+                || ext == Some("pdf");
+
+            if !is_supported_ext {
+                return false;
+            }
+
+            // Check against indexing rules (ignore patterns)
+            for rule in &indexing_rules {
+                // Simple pattern matching - check if path contains the pattern
+                if rule.contains('*') {
+                    // For glob patterns like "*.log" or "node_modules"
+                    let pattern = rule.trim_matches('*');
+                    if path_str.contains(pattern) {
+                        log::debug!("Ignoring file due to rule '{}': {}", rule, path_str);
+                        return false;
+                    }
+                } else {
+                    // For exact matches
+                    if path_str.contains(rule) {
+                        log::debug!("Ignoring file due to rule '{}': {}", rule, path_str);
+                        return false;
+                    }
+                }
+            }
+
+            true
         })
         .collect();
 
@@ -293,8 +326,12 @@ pub async fn index_directory(
 
         // Generate embeddings in batch for efficiency
         let chunk_embeddings = if !chunks.is_empty() {
+            // Get custom model path from config
+            let config = state.config_manager.get().await;
+            let custom_path = config.model_path.as_deref();
+
             // Try to load embedding model
-            match crate::embeddings::EmbeddingModel::new() {
+            match crate::embeddings::EmbeddingModel::new(custom_path) {
                 Ok(model) => {
                     // Collect all chunk contents for batch embedding
                     let chunk_texts: Vec<String> = chunks.iter()
@@ -389,7 +426,10 @@ pub async fn search(
 ) -> Result<Vec<SearchResult>, String> {
     log::info!("Searching for: {}", query);
 
-    crate::search::search_hybrid(&state.db_path, &query, collection_id, limit.unwrap_or(20))
+    let config = state.config_manager.get().await;
+    let custom_path = config.model_path.as_deref();
+
+    crate::search::search_hybrid(&state.db_path, &query, collection_id, limit.unwrap_or(20), custom_path)
         .map_err(|e| e.to_string())
 }
 
@@ -444,8 +484,10 @@ pub async fn open_file_at_line(file_path: String, line: i64) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub async fn check_model_status() -> Result<bool, String> {
-    crate::embeddings::EmbeddingModel::check_model_exists().map_err(|e| e.to_string())
+pub async fn check_model_status(state: State<'_, AppState>) -> Result<bool, String> {
+    let config = state.config_manager.get().await;
+    let custom_path = config.model_path.as_deref();
+    crate::embeddings::EmbeddingModel::check_model_exists(custom_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -620,7 +662,10 @@ pub async fn update_file_incremental(
 
     // Generate embeddings in batch
     let chunk_embeddings = if !chunks.is_empty() {
-        match crate::embeddings::EmbeddingModel::new() {
+        let config = state.config_manager.get().await;
+        let custom_path = config.model_path.as_deref();
+
+        match crate::embeddings::EmbeddingModel::new(custom_path) {
             Ok(model) => {
                 let chunk_texts: Vec<String> = chunks.iter()
                     .map(|c| c.content.clone())
@@ -846,4 +891,72 @@ pub async fn get_performance_stats(state: State<'_, AppState>) -> Result<Perform
         recent_searches,
         memory_usage_mb: None,
     })
+}
+
+// ============================================================
+// Configuration Management Commands
+// ============================================================
+
+#[tauri::command]
+pub async fn get_app_settings(state: State<'_, AppState>) -> Result<crate::config::AppConfig, String> {
+    log::info!("Getting app settings");
+    state.config_manager.get().await.pipe(Ok)
+}
+
+#[tauri::command]
+pub async fn save_app_settings(
+    state: State<'_, AppState>,
+    config: crate::config::AppConfig,
+) -> Result<(), String> {
+    log::info!("Saving app settings");
+    state.config_manager
+        .save(&config)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_model_path(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<(), String> {
+    log::info!("Updating model path: {:?}", path);
+    state.config_manager
+        .update_model_path(path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_indexing_rules(
+    state: State<'_, AppState>,
+    rules: Vec<String>,
+) -> Result<(), String> {
+    log::info!("Updating indexing rules: {:?}", rules);
+    state.config_manager
+        .update_indexing_rules(rules)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_theme(
+    state: State<'_, AppState>,
+    theme: String,
+) -> Result<(), String> {
+    log::info!("Updating theme: {}", theme);
+    state.config_manager
+        .update_theme(theme)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// Helper trait for pipe operator
+trait Pipe: Sized {
+    fn pipe<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(Self) -> R,
+    {
+        f(self)
+    }
 }

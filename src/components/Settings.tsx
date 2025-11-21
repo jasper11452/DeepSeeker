@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 
-interface Settings {
-    modelPath: string;
-    indexingRules: string[];
+interface AppConfig {
+    model_path: string | null;
+    indexing_rules: string[];
+    theme: string;
+    auto_reindex: boolean;
 }
 
 interface Props {
@@ -15,9 +18,54 @@ export default function Settings({ isOpen, onClose }: Props) {
     const [modelPath, setModelPath] = useState("");
     const [indexingRules, setIndexingRules] = useState<string[]>([]);
     const [newRule, setNewRule] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
-    // TODO: Load settings from backend
-    // For now, we'll just use local state as a placeholder
+    // Load settings from backend when component mounts or dialog opens
+    useEffect(() => {
+        if (isOpen) {
+            loadSettings();
+        }
+    }, [isOpen]);
+
+    const loadSettings = async () => {
+        try {
+            setLoading(true);
+            const config = await invoke<AppConfig>("get_app_settings");
+            setModelPath(config.model_path || "");
+            setIndexingRules(config.indexing_rules || []);
+        } catch (error) {
+            console.error("Failed to load settings:", error);
+            showMessage("error", "Failed to load settings");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const saveSettings = async () => {
+        try {
+            setSaving(true);
+            const config: AppConfig = {
+                model_path: modelPath || null,
+                indexing_rules: indexingRules,
+                theme: "dark", // Keep current theme
+                auto_reindex: true,
+            };
+            await invoke("save_app_settings", { config });
+            showMessage("success", "Settings saved successfully");
+        } catch (error) {
+            console.error("Failed to save settings:", error);
+            showMessage("error", "Failed to save settings");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const showMessage = (type: 'success' | 'error', text: string) => {
+        setSaveMessage({ type, text });
+        setTimeout(() => setSaveMessage(null), 3000);
+    };
 
     const handleSelectModelPath = async () => {
         const selected = await openDialog({
@@ -28,7 +76,6 @@ export default function Settings({ isOpen, onClose }: Props) {
 
         if (selected) {
             setModelPath(selected as string);
-            // TODO: Save to backend
         }
     };
 
@@ -37,13 +84,11 @@ export default function Settings({ isOpen, onClose }: Props) {
         if (newRule.trim()) {
             setIndexingRules([...indexingRules, newRule.trim()]);
             setNewRule("");
-            // TODO: Save to backend
         }
     };
 
     const removeRule = (index: number) => {
         setIndexingRules(indexingRules.filter((_, i) => i !== index));
-        // TODO: Save to backend
     };
 
     if (!isOpen) return null;
@@ -60,7 +105,14 @@ export default function Settings({ isOpen, onClose }: Props) {
                     </button>
                 </div>
 
-                <div className="p-6 space-y-8">
+                {loading && (
+                    <div className="p-6 flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+                    </div>
+                )}
+
+                {!loading && (
+                    <div className="p-6 space-y-8">
                     {/* Model Path Section */}
                     <div>
                         <h3 className="text-sm font-medium text-indigo-300 uppercase tracking-wider mb-3">AI Model Configuration</h3>
@@ -130,14 +182,57 @@ export default function Settings({ isOpen, onClose }: Props) {
                         </div>
                     </div>
                 </div>
+                )}
 
-                <div className="p-6 border-t border-white/5 bg-black/20 flex justify-end">
-                    <button
-                        onClick={onClose}
-                        className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-lg transition-colors"
-                    >
-                        Done
-                    </button>
+                <div className="p-6 border-t border-white/5 bg-black/20 flex items-center justify-between">
+                    {/* Save Message */}
+                    {saveMessage && (
+                        <div className={`flex items-center gap-2 text-sm ${
+                            saveMessage.type === 'success' ? 'text-green-400' : 'text-rose-400'
+                        }`}>
+                            {saveMessage.type === 'success' ? (
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                            ) : (
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            )}
+                            <span>{saveMessage.text}</span>
+                        </div>
+                    )}
+                    {!saveMessage && <div></div>}
+
+                    {/* Action Buttons */}
+                    <div className="flex gap-2">
+                        <button
+                            onClick={saveSettings}
+                            disabled={saving || loading}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+                        >
+                            {saving ? (
+                                <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                    <span>Saving...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                                    </svg>
+                                    <span>Save</span>
+                                </>
+                            )}
+                        </button>
+                        <button
+                            onClick={onClose}
+                            disabled={saving}
+                            className="px-4 py-2 bg-white/10 hover:bg-white/20 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+                        >
+                            Close
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

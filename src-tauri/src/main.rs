@@ -31,6 +31,11 @@ fn main() {
             commands::get_error_logs,
             commands::clear_error_logs,
             commands::get_performance_stats,
+            commands::get_app_settings,
+            commands::save_app_settings,
+            commands::update_model_path,
+            commands::update_indexing_rules,
+            commands::update_theme,
         ])
         .setup(|app| {
             // Initialize database on startup
@@ -63,9 +68,25 @@ fn main() {
                 }
             }
 
-            // Store db path in app state
+            // Initialize configuration manager
+            let config_manager = std::sync::Arc::new(
+                config::ConfigManager::new(db_path.clone())
+                    .expect("Failed to initialize config manager")
+            );
+
+            // Load configuration
+            let config_clone = config_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                match config_clone.load().await {
+                    Ok(cfg) => log::info!("Configuration loaded: theme={}, rules={}", cfg.theme, cfg.indexing_rules.len()),
+                    Err(e) => log::warn!("Failed to load configuration: {}", e),
+                }
+            });
+
+            // Store db path and config in app state
             app.manage(AppState {
                 db_path: db_path.clone(),
+                config_manager,
             });
 
             // Start HTTP server for browser extension in background

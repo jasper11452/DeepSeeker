@@ -213,7 +213,14 @@ fn update_file_sync(app_handle: &AppHandle, file_path: String) -> Result<(), Str
     // Insert chunks with embeddings
     let mut chunks = chunks_result?;
     let chunk_embeddings = if !chunks.is_empty() {
-        match crate::embeddings::EmbeddingModel::new() {
+        // Get custom model path from config
+        let custom_path = {
+            let config = tokio::runtime::Handle::current()
+                .block_on(state.config_manager.get());
+            config.model_path.clone()
+        };
+
+        match crate::embeddings::EmbeddingModel::new(custom_path.as_deref()) {
             Ok(model) => {
                 let texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
                 model.embed_batch(&texts).ok()

@@ -20,12 +20,13 @@ pub fn search_hybrid(
     query: &str,
     collection_id: Option<i64>,
     limit: usize,
+    custom_model_path: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
     let conn = db::get_connection(db_path)?;
 
     // Try to load embedding model for vector search
     // If model not available, fall back to BM25 only
-    let embedding_model = EmbeddingModel::new();
+    let embedding_model = EmbeddingModel::new(custom_model_path);
 
     match embedding_model {
         Ok(model) => {
@@ -310,7 +311,7 @@ mod tests {
 
         db::init_database(&db_path).unwrap();
 
-        let results = search_hybrid(&db_path, "test query", None, 10).unwrap();
+        let results = search_hybrid(&db_path, "test query", None, 10, None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -400,7 +401,7 @@ mod tests {
         drop(conn);
 
         // Search should work even without embeddings (falls back to BM25)
-        let results = search_hybrid(&db_path, "rust", None, 10).unwrap();
+        let results = search_hybrid(&db_path, "rust", None, 10, None).unwrap();
         assert!(results.len() > 0);
     }
 }
