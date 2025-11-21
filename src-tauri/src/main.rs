@@ -32,6 +32,7 @@ fn main() {
             commands::clear_error_logs,
             commands::get_performance_stats,
             commands::get_chunk_context,
+            commands::get_indexing_progress,
         ])
         .setup(|app| {
             // Initialize database on startup
@@ -74,7 +75,10 @@ fn main() {
             
             // Initialize Watcher State
             app.manage(deepseeker::watcher::WatcherState::new());
-            
+
+            // Initialize Progress Tracker
+            app.manage(deepseeker::progress::ProgressTracker::new());
+
             // Initialize Watcher Service
             if let Err(e) = deepseeker::watcher::init_watcher(&app_handle) {
                 eprintln!("Failed to initialize file watcher: {}", e);

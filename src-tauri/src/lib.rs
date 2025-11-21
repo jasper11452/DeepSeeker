@@ -6,7 +6,9 @@ pub mod search;
 pub mod models;
 pub mod http_server;
 pub mod pdf_parser;
+pub mod pdf_ocr;
 pub mod watcher;
+pub mod progress;
 
 use std::path::PathBuf;
 
