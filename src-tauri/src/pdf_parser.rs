@@ -4,8 +4,10 @@ use std::path::Path;
 /// Status of PDF text extraction
 #[derive(Debug, Clone)]
 pub enum PdfStatus {
-    /// Successfully extracted text
+    /// Successfully extracted text from text layer
     Success { text: String, page_count: usize },
+    /// Successfully extracted text using OCR
+    OcrSuccess { text: String, page_count: usize },
     /// PDF appears to be scanned (no text layer)
     ScannedPdf { page_count: usize },
     /// Extraction failed
@@ -14,7 +16,22 @@ pub enum PdfStatus {
 
 /// Extract text from a PDF file
 /// Returns the extracted text or an error status
+/// If the PDF is scanned (no text layer), automatically attempts OCR extraction
 pub fn extract_text_from_pdf(path: &Path) -> Result<PdfStatus> {
+    extract_text_from_pdf_with_progress(path, None)
+}
+
+/// Extract text from a PDF file with optional progress callback
+/// Returns the extracted text or an error status
+/// If the PDF is scanned (no text layer), automatically attempts OCR extraction
+///
+/// # Arguments
+/// * `path` - Path to the PDF file
+/// * `progress_callback` - Optional callback for OCR progress (current_page, total_pages)
+pub fn extract_text_from_pdf_with_progress(
+    path: &Path,
+    progress_callback: Option<crate::pdf_ocr::OcrProgressCallback>,
+) -> Result<PdfStatus> {
     log::info!("Extracting text from PDF: {:?}", path);
 
     // Read PDF file
@@ -31,7 +48,26 @@ pub fn extract_text_from_pdf(path: &Path) -> Result<PdfStatus> {
     // Check if PDF is scanned (minimal or no text)
     if is_scanned_pdf(&extracted, page_count) {
         log::warn!("Detected scanned PDF (no text layer): {:?}", path);
-        return Ok(PdfStatus::ScannedPdf { page_count });
+        log::info!("Attempting OCR extraction for scanned PDF...");
+
+        // Attempt OCR extraction
+        match crate::pdf_ocr::ocr_pdf(&bytes, page_count, progress_callback) {
+            Ok(ocr_text) => {
+                log::info!(
+                    "✓ OCR successful: Extracted {} chars from {} pages",
+                    ocr_text.len(),
+                    page_count
+                );
+                return Ok(PdfStatus::OcrSuccess {
+                    text: ocr_text,
+                    page_count,
+                });
+            }
+            Err(e) => {
+                log::error!("OCR failed: {}", e);
+                return Ok(PdfStatus::ScannedPdf { page_count });
+            }
+        }
     }
 
     log::info!(
