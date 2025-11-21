@@ -11,11 +11,20 @@ use tauri::{State, AppHandle, Manager}; // Added Manager
 use walkdir::WalkDir;
 use crate::watcher::WatcherState;
 use notify::Watcher; // Added for watcher logic
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchFilters {
     #[serde(rename = "fileTypes")]
     pub file_types: Vec<String>,
+}
+
+/// Represents a chunk job for cross-file batch embedding
+struct ChunkJob {
+    doc_id: i64,
+    chunk_idx: usize,
+    chunk: Chunk,
 }
 
 #[tauri::command]
@@ -174,12 +183,19 @@ pub async fn index_directory(
     directory_path: String,
 ) -> Result<IndexProgress, String> {
     log::info!(
-        "Indexing directory: {} for collection {}",
+        "Indexing directory: {} for collection {} (with cross-file batch embedding)",
         directory_path,
         collection_id
     );
 
+    // Batch size for cross-file embedding optimization
+    const BATCH_SIZE: usize = 128;
+
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+
+    // Wrap connection in Arc<Mutex> for sharing with consumer thread
+    let conn_arc = Arc::new(Mutex::new(conn));
+    let conn_consumer = Arc::clone(&conn_arc);
 
     // Find all Markdown and PDF files
     let files: Vec<_> = WalkDir::new(&directory_path)
@@ -194,8 +210,71 @@ pub async fn index_directory(
         .collect();
 
     let total_files = files.len();
-    let mut processed = 0;
+    let processed = Arc::new(Mutex::new(0));
+    let processed_clone = Arc::clone(&processed);
 
+    // Create channel for chunk jobs
+    let (tx, rx) = mpsc::channel::<ChunkJob>();
+
+    // Try to load embedding model once (shared across all chunks)
+    let embedding_model = match crate::embeddings::EmbeddingModel::new() {
+        Ok(model) => {
+            log::info!("✓ Embedding model loaded, using batch size: {}", BATCH_SIZE);
+            Some(Arc::new(model))
+        }
+        Err(e) => {
+            log::warn!("⚠️ Embedding model not available: {}", e);
+            log::warn!("   Continuing without embeddings (BM25-only search)");
+            None
+        }
+    };
+    let model_for_consumer = embedding_model.clone();
+
+    // Spawn consumer thread for batch embedding and insertion
+    let consumer_handle = thread::spawn(move || {
+        let mut chunk_buffer: Vec<ChunkJob> = Vec::with_capacity(BATCH_SIZE);
+        let mut total_processed = 0;
+
+        loop {
+            // Receive chunks until we hit batch size or channel closes
+            match rx.recv() {
+                Ok(job) => {
+                    chunk_buffer.push(job);
+
+                    // Process batch when full
+                    if chunk_buffer.len() >= BATCH_SIZE {
+                        if let Err(e) = process_chunk_batch(
+                            &conn_consumer,
+                            &mut chunk_buffer,
+                            &model_for_consumer,
+                        ) {
+                            log::error!("Failed to process chunk batch: {}", e);
+                        }
+                        total_processed += chunk_buffer.len();
+                        chunk_buffer.clear();
+                    }
+                }
+                Err(_) => {
+                    // Channel closed, process remaining chunks
+                    if !chunk_buffer.is_empty() {
+                        if let Err(e) = process_chunk_batch(
+                            &conn_consumer,
+                            &mut chunk_buffer,
+                            &model_for_consumer,
+                        ) {
+                            log::error!("Failed to process final chunk batch: {}", e);
+                        }
+                        total_processed += chunk_buffer.len();
+                    }
+                    break;
+                }
+            }
+        }
+
+        log::info!("✓ Consumer thread finished: {} chunks processed", total_processed);
+    });
+
+    // Producer: Process files and send chunks to queue
     for entry in files {
         let path = entry.path();
         let path_str = path.to_string_lossy().to_string();
@@ -216,17 +295,14 @@ pub async fn index_directory(
                         page_count,
                         path_str
                     );
-                    // Store as scanned_pdf with empty content
                     ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "scanned_pdf".to_string())
                 }
                 Ok(crate::pdf_parser::PdfStatus::Error(error_msg)) => {
                     log::error!("PDF extraction error {}: {}", path_str, error_msg);
-                    // Store as error with empty content
                     ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
                 }
                 Err(e) => {
                     log::error!("Failed to extract PDF {}: {}", path_str, e);
-                    // Store as error with empty content
                     ("".to_string(), Ok::<Vec<Chunk>, String>(vec![]), "error".to_string())
                 }
             }
@@ -256,6 +332,7 @@ pub async fn index_directory(
             .as_secs() as i64;
 
         // Check if document already exists with same hash
+        let conn = conn_arc.lock().unwrap();
         let exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) > 0 FROM documents WHERE collection_id = ? AND path = ? AND hash = ?",
@@ -265,8 +342,10 @@ pub async fn index_directory(
             .map_err(|e| e.to_string())?;
 
         if exists {
-            log::info!("Skipping unchanged file: {}", path_str);
-            processed += 1;
+            log::debug!("Skipping unchanged file: {}", path_str);
+            let mut p = processed_clone.lock().unwrap();
+            *p += 1;
+            drop(conn);
             continue;
         }
 
@@ -287,73 +366,43 @@ pub async fn index_directory(
         .map_err(|e| e.to_string())?;
 
         let doc_id = conn.last_insert_rowid();
+        drop(conn); // Release lock before sending to queue
 
-        // Insert chunks with correct doc_id and embeddings
-        let mut chunks = chunks_result?;
-
-        // Generate embeddings in batch for efficiency
-        let chunk_embeddings = if !chunks.is_empty() {
-            // Try to load embedding model
-            match crate::embeddings::EmbeddingModel::new() {
-                Ok(model) => {
-                    // Collect all chunk contents for batch embedding
-                    let chunk_texts: Vec<String> = chunks.iter()
-                        .map(|c| c.content.clone())
-                        .collect();
-
-                    // Generate embeddings in batch (5-10x faster than individual)
-                    match model.embed_batch(&chunk_texts) {
-                        Ok(embeddings) => {
-                            log::debug!("Generated {} embeddings for {}", embeddings.len(), path_str);
-                            Some(embeddings)
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to generate embeddings for {}: {}", path_str, e);
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Embedding model not available: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Insert chunks with embeddings
-        for (idx, chunk) in chunks.iter_mut().enumerate() {
+        // Send chunks to consumer queue
+        let chunks = chunks_result?;
+        for (idx, mut chunk) in chunks.into_iter().enumerate() {
             chunk.doc_id = doc_id;
-            let metadata_json = serde_json::to_string(&chunk.metadata).ok();
 
-            // Convert embedding to bytes if available
-            let embedding_blob = chunk_embeddings.as_ref()
-                .and_then(|embs| embs.get(idx))
-                .map(|emb| crate::search::f32_vec_to_bytes(emb));
+            let job = ChunkJob {
+                doc_id,
+                chunk_idx: idx,
+                chunk,
+            };
 
-            conn.execute(
-                "INSERT INTO chunks (doc_id, content, metadata, start_line, end_line, embedding, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    chunk.doc_id,
-                    chunk.content,
-                    metadata_json,
-                    chunk.start_line as i64,
-                    chunk.end_line as i64,
-                    embedding_blob,
-                    chunk.created_at,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
+            // Send to queue (blocks if queue is full, providing backpressure)
+            if tx.send(job).is_err() {
+                log::error!("Failed to send chunk to queue (consumer died)");
+                break;
+            }
         }
 
-        processed += 1;
-        log::info!("Indexed {} with {} chunks ({}/{})",
-                   path_str, chunks.len(), processed, total_files);
+        let mut p = processed_clone.lock().unwrap();
+        *p += 1;
+        let current_processed = *p;
+        drop(p);
+
+        log::info!("Queued {} ({}/{})", path_str, current_processed, total_files);
     }
 
+    // Close channel to signal consumer we're done
+    drop(tx);
+
+    // Wait for consumer to finish processing all chunks
+    log::info!("Waiting for consumer thread to finish...");
+    consumer_handle.join().map_err(|_| "Consumer thread panicked".to_string())?;
+
     // Update collection metadata after indexing
+    let conn = conn_arc.lock().unwrap();
     let now = chrono::Utc::now().timestamp();
     let file_count: i64 = conn
         .query_row(
@@ -369,15 +418,79 @@ pub async fn index_directory(
     )
     .map_err(|e| e.to_string())?;
 
-    log::info!("Collection {} updated: {} files indexed", collection_id, file_count);
+    let final_processed = *processed.lock().unwrap();
+    log::info!("✓ Collection {} indexed: {}/{} files processed",
+               collection_id, final_processed, total_files);
 
     Ok(IndexProgress {
         total_files,
-        processed_files: processed,
+        processed_files: final_processed,
         current_file: None,
         errors: Vec::new(),
         status: "completed".to_string(),
     })
+}
+
+/// Process a batch of chunks: generate embeddings and insert into database
+fn process_chunk_batch(
+    conn_arc: &Arc<Mutex<rusqlite::Connection>>,
+    chunk_jobs: &mut Vec<ChunkJob>,
+    model: &Option<Arc<crate::embeddings::EmbeddingModel>>,
+) -> Result<(), String> {
+    if chunk_jobs.is_empty() {
+        return Ok(());
+    }
+
+    let batch_size = chunk_jobs.len();
+    log::debug!("Processing batch of {} chunks", batch_size);
+
+    // Generate embeddings for entire batch
+    let embeddings = if let Some(model) = model {
+        let chunk_texts: Vec<String> = chunk_jobs.iter()
+            .map(|job| job.chunk.content.clone())
+            .collect();
+
+        match model.embed_batch(&chunk_texts) {
+            Ok(embs) => {
+                log::debug!("✓ Generated {} embeddings in batch", embs.len());
+                Some(embs)
+            }
+            Err(e) => {
+                log::warn!("Failed to generate batch embeddings: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Insert all chunks into database
+    let conn = conn_arc.lock().unwrap();
+    for (idx, job) in chunk_jobs.iter().enumerate() {
+        let metadata_json = serde_json::to_string(&job.chunk.metadata).ok();
+
+        // Convert embedding to bytes if available
+        let embedding_blob = embeddings.as_ref()
+            .and_then(|embs| embs.get(idx))
+            .map(|emb| crate::search::f32_vec_to_bytes(emb));
+
+        conn.execute(
+            "INSERT INTO chunks (doc_id, content, metadata, start_line, end_line, embedding, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                job.chunk.doc_id,
+                job.chunk.content,
+                metadata_json,
+                job.chunk.start_line as i64,
+                job.chunk.end_line as i64,
+                embedding_blob,
+                job.chunk.created_at,
+            ],
+        )
+        .map_err(|e| format!("Failed to insert chunk: {}", e))?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
