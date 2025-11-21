@@ -10,12 +10,14 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tauri::{AppHandle, Manager};
+use crate::AppState;
 
 use crate::db;
 
 #[derive(Clone)]
 pub struct ServerState {
-    pub db_path: PathBuf,
+    pub app_handle: AppHandle,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,8 +45,8 @@ pub struct HealthResponse {
 }
 
 /// Start the HTTP server for browser extension communication
-pub async fn start_server(db_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let state = Arc::new(ServerState { db_path });
+pub async fn start_server(app_handle: AppHandle) {
+    let state = Arc::new(ServerState { app_handle });
 
     // Configure CORS to allow localhost requests
     let cors = CorsLayer::new()
@@ -61,10 +63,13 @@ pub async fn start_server(db_path: PathBuf) -> Result<(), Box<dyn std::error::Er
     let addr = SocketAddr::from(([127, 0, 0, 1], 3737));
     log::info!("HTTP server listening on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
+        if let Err(e) = axum::serve(listener, app).await {
+            log::error!("Server error: {}", e);
+        }
+    } else {
+        log::error!("Failed to bind to address: {}", addr);
+    }
 }
 
 /// Health check endpoint
@@ -82,9 +87,11 @@ async fn handle_clip(
 ) -> impl IntoResponse {
     log::info!("Received clip request from: {}", payload.url);
 
+    let app_state = state.app_handle.state::<AppState>();
+    
     // For now, store as a text document
     // TODO: Implement proper web content storage with metadata
-    match store_web_clip(&state.db_path, payload).await {
+    match store_web_clip(&app_state.db_path, payload).await {
         Ok(doc_id) => (
             StatusCode::OK,
             Json(ClipResponse {

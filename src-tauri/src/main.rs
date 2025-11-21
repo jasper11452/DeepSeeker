@@ -20,6 +20,8 @@ fn main() {
             commands::detect_ghost_files,
             commands::full_reindex,
             commands::open_file_at_line,
+            commands::check_model_status,
+            commands::start_watching_collections,
         ])
         .setup(|app| {
             // Initialize database on startup
@@ -58,11 +60,19 @@ fn main() {
             });
 
             // Start HTTP server for browser extension in background
-            let http_db_path = db_path.clone();
+            let app_handle = app.handle().clone();
+            
+            // Initialize Watcher State
+            app.manage(deepseeker::watcher::WatcherState::new());
+            
+            // Initialize Watcher Service
+            if let Err(e) = deepseeker::watcher::init_watcher(&app_handle) {
+                eprintln!("Failed to initialize file watcher: {}", e);
+            }
+
+            // Start HTTP Server
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = http_server::start_server(http_db_path).await {
-                    log::error!("HTTP server error: {}", e);
-                }
+                deepseeker::http_server::start_server(app_handle).await;
             });
 
             log::info!("DeepSeeker initialized successfully");

@@ -3,7 +3,7 @@ use ndarray::Array2;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
 const MAX_SEQ_LENGTH: usize = 512;
@@ -19,7 +19,7 @@ const EMBEDDING_DIM: usize = 1024; // bge-m3 output dimension
 ///
 /// Model: https://huggingface.co/BAAI/bge-m3
 pub struct EmbeddingModel {
-    session: Arc<Session>,
+    session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
 }
 
@@ -27,7 +27,7 @@ impl EmbeddingModel {
     /// Initialize embedding model from local files
     ///
     /// Expected directory structure:
-    /// ```
+    /// ```text
     /// ~/.deepseeker/models/bge-m3/
     /// ├── model.onnx
     /// └── tokenizer.json
@@ -66,7 +66,7 @@ impl EmbeddingModel {
         log::info!("Embedding model loaded successfully from {:?}", model_dir);
 
         Ok(Self {
-            session: Arc::new(session),
+            session: Arc::new(Mutex::new(session)),
             tokenizer,
         })
     }
@@ -79,7 +79,7 @@ impl EmbeddingModel {
     }
 
     /// Get model directory path
-    fn get_model_dir() -> Result<PathBuf> {
+    pub fn get_model_dir() -> Result<PathBuf> {
         let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
         let model_dir = PathBuf::from(home)
             .join(".deepseeker")
@@ -90,6 +90,15 @@ impl EmbeddingModel {
         std::fs::create_dir_all(&model_dir)?;
 
         Ok(model_dir)
+    }
+
+    /// Check if model files exist
+    pub fn check_model_exists() -> Result<bool> {
+        let model_dir = Self::get_model_dir()?;
+        let model_path = model_dir.join("model.onnx");
+        let tokenizer_path = model_dir.join("tokenizer.json");
+
+        Ok(model_path.exists() && tokenizer_path.exists())
     }
 
     /// Generate embedding vector for a single text
@@ -134,8 +143,8 @@ impl EmbeddingModel {
         let attention_mask_value = ort::value::Value::from_array(attention_mask_array)?;
 
         // Run inference
-        let outputs = self
-            .session
+        let mut session = self.session.lock().unwrap();
+        let outputs = session
             .run(ort::inputs![
                 "input_ids" => input_ids_value,
                 "attention_mask" => attention_mask_value,

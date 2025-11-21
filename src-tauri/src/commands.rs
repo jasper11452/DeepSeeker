@@ -3,31 +3,50 @@ use crate::models::*;
 use crate::AppState;
 use anyhow::Result;
 use rusqlite::params;
+use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use tauri::State;
+use tauri::{State, AppHandle, Manager}; // Added Manager
 use walkdir::WalkDir;
+use crate::watcher::WatcherState;
+use notify::Watcher; // Added for watcher logic
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchFilters {
+    #[serde(rename = "fileTypes")]
+    pub file_types: Vec<String>,
+}
 
 #[tauri::command]
 pub async fn create_collection(
-    state: State<'_, AppState>,
+    app_handle: AppHandle,
     name: String,
     folder_path: Option<String>,
 ) -> Result<Collection, String> {
-    log::info!("Creating collection: {} with folder: {:?}", name, folder_path);
-
+    let state = app_handle.state::<AppState>();
+    let watcher_state = app_handle.state::<WatcherState>();
+    
     let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
-
     let now = chrono::Utc::now().timestamp();
 
     conn.execute(
-        "INSERT INTO collections (name, folder_path, file_count, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+        "INSERT INTO collections (name, folder_path, created_at, updated_at) VALUES (?, ?, ?, ?)",
         params![name, folder_path, now, now],
     )
     .map_err(|e| format!("Failed to create collection: {}", e))?;
 
     let id = conn.last_insert_rowid();
+
+    // Start watching if it's a folder
+    if let Some(path) = &folder_path {
+        if let Ok(mut watcher_guard) = watcher_state.watcher.lock() {
+             if let Some(watcher) = watcher_guard.as_mut() {
+                 let _ = watcher.watch(Path::new(path), notify::RecursiveMode::Recursive);
+                 log::info!("Started watching collection: {}", path);
+             }
+        }
+    }
 
     Ok(Collection {
         id,
@@ -379,5 +398,34 @@ pub async fn open_file_at_line(file_path: String, line: i64) -> Result<(), Strin
     }
 
     log::info!("Opened with system default editor (no line jumping)");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn check_model_status() -> Result<bool, String> {
+    crate::embeddings::EmbeddingModel::check_model_exists().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_watching_collections(
+    state: State<'_, AppState>,
+    watcher_state: State<'_, WatcherState>,
+) -> Result<(), String> {
+    let conn = db::get_connection(&state.db_path).map_err(|e| e.to_string())?;
+    let collections = db::get_collections(&conn).map_err(|e| e.to_string())?;
+    
+    if let Ok(mut watcher_guard) = watcher_state.watcher.lock() {
+        if let Some(watcher) = watcher_guard.as_mut() {
+            use notify::Watcher;
+            for collection in collections {
+                if let Some(path) = collection.folder_path {
+                    if Path::new(&path).exists() {
+                        let _ = watcher.watch(Path::new(&path), notify::RecursiveMode::Recursive);
+                        log::info!("Restored watch for: {}", path);
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }

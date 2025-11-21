@@ -40,7 +40,7 @@ export function ValidationTest() {
       setMessage(`测试集合已创建 (ID: ${collection.id})，正在索引测试文件...`);
 
       // 硬编码测试数据路径
-      const testDataPath = '/home/user/deepseeker/test-data';
+      const testDataPath = '/Users/jasper/deepseeker/test-data';
 
       // 索引测试目录
       await invoke('index_directory', {
@@ -208,11 +208,10 @@ export function ValidationTest() {
 
         {/* 状态消息 */}
         {message && (
-          <div className={`p-3 rounded ${
-            message.startsWith('✅') ? 'bg-green-50 border border-green-200 text-green-800' :
-            message.startsWith('❌') ? 'bg-red-50 border border-red-200 text-red-800' :
-            'bg-blue-50 border border-blue-200 text-blue-800'
-          }`}>
+          <div className={`p-3 rounded ${message.startsWith('✅') ? 'bg-green-50 border border-green-200 text-green-800' :
+              message.startsWith('❌') ? 'bg-red-50 border border-red-200 text-red-800' :
+                'bg-blue-50 border border-blue-200 text-blue-800'
+            }`}>
             {message}
           </div>
         )}

@@ -127,10 +127,44 @@ fn create_schema(conn: &Connection) -> Result<()> {
 
     // Create vector search virtual table for embeddings
     // Using sqlite-vec for efficient vector similarity search
+    // The rowid is implicitly the chunk_id from chunks table
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+            chunk_id INTEGER PRIMARY KEY,
             embedding float[1024]
         )",
+        [],
+    )?;
+
+    // Triggers to keep chunks_vec in sync with chunks table
+    // Insert trigger: when embedding is added to chunks, sync to chunks_vec
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS chunks_vec_ai AFTER INSERT ON chunks
+         WHEN new.embedding IS NOT NULL
+         BEGIN
+             INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding)
+             SELECT new.id, new.embedding;
+         END",
+        [],
+    )?;
+
+    // Update trigger: when embedding is updated in chunks, sync to chunks_vec
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS chunks_vec_au AFTER UPDATE ON chunks
+         WHEN new.embedding IS NOT NULL
+         BEGIN
+             INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding)
+             SELECT new.id, new.embedding;
+         END",
+        [],
+    )?;
+
+    // Delete trigger: when chunk is deleted, remove from chunks_vec
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS chunks_vec_ad AFTER DELETE ON chunks
+         BEGIN
+             DELETE FROM chunks_vec WHERE chunk_id = old.id;
+         END",
         [],
     )?;
 
@@ -161,6 +195,34 @@ fn create_schema(conn: &Connection) -> Result<()> {
 pub fn get_connection(db_path: &Path) -> Result<Connection> {
     Connection::open(db_path)
         .context("Failed to open database connection")
+}
+
+use crate::models::Collection;
+
+/// Get all collections
+pub fn get_collections(conn: &Connection) -> Result<Vec<Collection>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, folder_path, file_count, last_sync, created_at, updated_at FROM collections ORDER BY name"
+    )?;
+
+    let collections = stmt.query_map([], |row| {
+        Ok(Collection {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            folder_path: row.get(2)?,
+            file_count: row.get(3)?,
+            last_sync: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for collection in collections {
+        result.push(collection?);
+    }
+
+    Ok(result)
 }
 
 /// Check for and remove ghost data (files that no longer exist on disk)

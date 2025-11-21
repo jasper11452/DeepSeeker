@@ -104,20 +104,64 @@ fn hybrid_search_full(
     limit: usize,
     model: &EmbeddingModel,
 ) -> Result<Vec<SearchResult>> {
-    // Step 1: BM25 Search (get more results for re-ranking)
-    let bm25_results = bm25_search_only(conn, query, collection_id, limit * 3)?;
+    // Step 1: Generate query embedding
+    let query_embedding = model.embed(query)?;
+    let query_embedding_bytes = f32_vec_to_bytes(&query_embedding);
 
-    // If no BM25 results, return empty
-    if bm25_results.is_empty() {
-        return Ok(vec![]);
+    // Step 2: Vector KNN search using sqlite-vec
+    // This is orders of magnitude faster than full table scans
+    let vec_sql = if collection_id.is_some() {
+        "SELECT 
+            c.id as chunk_id,
+            vec_distance_cosine(v.embedding, ?) as distance
+         FROM chunks_vec v
+         JOIN chunks c ON v.chunk_id = c.id
+         JOIN documents d ON c.doc_id = d.id
+         WHERE d.collection_id = ?
+         ORDER BY distance
+         LIMIT ?"
+    } else {
+        "SELECT 
+            c.id as chunk_id,
+            vec_distance_cosine(v.embedding, ?) as distance
+         FROM chunks_vec v
+         JOIN chunks c ON v.chunk_id = c.id
+         ORDER BY distance
+         LIMIT ?"
+    };
+
+    let mut vec_stmt = conn.prepare(vec_sql)?;
+    
+    let vec_candidates: Vec<(i64, f32)> = if let Some(cid) = collection_id {
+        vec_stmt.query_map(params![query_embedding_bytes, cid, limit * 3], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    } else {
+        vec_stmt.query_map(params![query_embedding_bytes, limit * 3], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    };
+
+    // If no vector results, fall back to BM25 only
+    if vec_candidates.is_empty() {
+        log::warn!("No vector candidates found, falling back to BM25");
+        return bm25_search_only(conn, query, collection_id, limit);
     }
 
-    // Step 2: Generate query embedding
-    let query_embedding = model.embed(query)?;
-    let query_embedding_normalized = EmbeddingModel::normalize(&query_embedding);
-
-    // Step 3: Get embeddings for all BM25 results
-    let chunk_ids: Vec<i64> = bm25_results.iter().map(|r| r.chunk_id).collect();
+    // Step 3: Get content and metadata for vector candidates
+    let chunk_ids: Vec<i64> = vec_candidates.iter().map(|(id, _)| *id).collect();
+    let vec_scores: HashMap<i64, f32> = vec_candidates
+        .iter()
+        .map(|(id, dist)| {
+            // Convert distance to similarity: similarity = 1 - distance
+            // Cosine distance is in [0, 2], so similarity is in [-1, 1]
+            // We normalize to [0, 1]
+            let similarity = (1.0 - dist).max(0.0).min(1.0);
+            (*id, similarity)
+        })
+        .collect();
 
     let placeholders = chunk_ids
         .iter()
@@ -125,78 +169,91 @@ fn hybrid_search_full(
         .collect::<Vec<_>>()
         .join(",");
 
-    let sql = format!(
-        "SELECT id, embedding FROM chunks WHERE id IN ({})",
+    let content_sql = format!(
+        "SELECT 
+            c.id as chunk_id,
+            c.doc_id,
+            d.path as document_path,
+            COALESCE(d.status, 'normal') as document_status,
+            c.content,
+            c.metadata,
+            c.start_line,
+            c.end_line
+         FROM chunks c
+         JOIN documents d ON c.doc_id = d.id
+         WHERE c.id IN ({})",
         placeholders
     );
 
-    let mut stmt = conn.prepare(&sql)?;
+    let mut content_stmt = conn.prepare(&content_sql)?;
     let params: Vec<&dyn rusqlite::ToSql> = chunk_ids
         .iter()
         .map(|id| id as &dyn rusqlite::ToSql)
         .collect();
 
-    let embeddings_map: HashMap<i64, Vec<f32>> = stmt
+    let chunk_data: HashMap<i64, SearchResult> = content_stmt
         .query_map(&params[..], |row| {
-            let id: i64 = row.get(0)?;
-            let embedding_blob: Option<Vec<u8>> = row.get(1)?;
+            let chunk_id: i64 = row.get(0)?;
+            let metadata_str: Option<String> = row.get(5)?;
+            let metadata: Option<ChunkMetadata> =
+                metadata_str.and_then(|s| serde_json::from_str(&s).ok());
 
-            let embedding = if let Some(blob) = embedding_blob {
-                // Deserialize embedding from BLOB (f32 array)
-                bytes_to_f32_vec(&blob)
-            } else {
-                vec![]
-            };
-
-            Ok((id, embedding))
+            Ok((
+                chunk_id,
+                SearchResult {
+                    chunk_id,
+                    doc_id: row.get(1)?,
+                    document_path: row.get(2)?,
+                    document_status: row.get(3)?,
+                    content: row.get(4)?,
+                    metadata,
+                    score: 0.0, // Will be filled later
+                    start_line: row.get::<_, i64>(6)? as usize,
+                    end_line: row.get::<_, i64>(7)? as usize,
+                },
+            ))
         })?
         .filter_map(|r| r.ok())
         .collect();
 
-    // Step 4: Calculate hybrid scores
-    let mut hybrid_results: Vec<SearchResult> = bm25_results
+    // Step 4: BM25 search for keyword matching
+    let bm25_results = bm25_search_only(conn, query, collection_id, limit * 3)?;
+    let bm25_scores: HashMap<i64, f32> = bm25_results
         .into_iter()
-        .filter_map(|mut result| {
+        .map(|r| {
             // Normalize BM25 score to [0, 1] range
-            // FTS5 rank is negative (lower is better), so we invert it
-            let bm25_score_normalized = 1.0 / (1.0 + result.score.abs());
+            let normalized = 1.0 / (1.0 + r.score.abs());
+            (r.chunk_id, normalized)
+        })
+        .collect();
 
-            // Get vector similarity
-            let vec_score = if let Some(chunk_embedding) = embeddings_map.get(&result.chunk_id) {
-                if !chunk_embedding.is_empty() {
-                    let normalized_chunk_emb = EmbeddingModel::normalize(chunk_embedding);
-                    EmbeddingModel::cosine_similarity(
-                        &query_embedding_normalized,
-                        &normalized_chunk_emb,
-                    )
-                } else {
-                    0.0 // No embedding available
-                }
-            } else {
-                0.0
-            };
+    // Step 5: Combine vector and BM25 scores
+    let mut hybrid_results: Vec<SearchResult> = chunk_data
+        .into_iter()
+        .filter_map(|(chunk_id, mut result)| {
+            let vec_score = vec_scores.get(&chunk_id).copied().unwrap_or(0.0);
+            let bm25_score = bm25_scores.get(&chunk_id).copied().unwrap_or(0.0);
 
             // Hybrid score: weighted combination
-            let hybrid_score =
-                VECTOR_WEIGHT * vec_score + BM25_WEIGHT * bm25_score_normalized;
-
+            let hybrid_score = VECTOR_WEIGHT * vec_score + BM25_WEIGHT * bm25_score;
             result.score = hybrid_score;
 
             Some(result)
         })
         .collect();
 
-    // Step 5: Re-rank by hybrid score
+    // Step 6: Sort by hybrid score (descending)
     hybrid_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
 
-    // Step 6: Return top results
+    // Step 7: Return top results
     hybrid_results.truncate(limit);
 
     log::info!(
-        "Hybrid search found {} results (BM25 weight: {}, Vector weight: {})",
+        "Hybrid search found {} results (BM25 weight: {}, Vector weight: {}, Vector candidates: {})",
         hybrid_results.len(),
         BM25_WEIGHT,
-        VECTOR_WEIGHT
+        VECTOR_WEIGHT,
+        vec_candidates.len()
     );
 
     Ok(hybrid_results)
@@ -222,6 +279,7 @@ fn parse_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
 }
 
 /// Convert bytes to f32 vector (embedding deserialization)
+#[allow(dead_code)] // Used in tests
 fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)
@@ -259,10 +317,10 @@ mod tests {
     #[test]
     fn test_bm25_score_normalization() {
         // Test BM25 score normalization function
-        let test_scores = vec![-1.0, -5.0, -10.0, -20.0];
+        let test_scores: Vec<f32> = vec![-1.0, -5.0, -10.0, -20.0];
 
         for score in test_scores {
-            let normalized = 1.0 / (1.0 + score.abs());
+            let normalized = 1.0f32 / (1.0f32 + score.abs());
             assert!(normalized > 0.0 && normalized <= 1.0);
         }
     }

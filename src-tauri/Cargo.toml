@@ -37,6 +37,7 @@ walkdir = "2"
 sha2 = "0.10"
 hex = "0.4"
 pdf-extract = "0.7"
+notify = "6.1"
 
 # Utilities
 chrono = "0.4"

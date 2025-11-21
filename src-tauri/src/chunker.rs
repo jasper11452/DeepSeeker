@@ -3,7 +3,7 @@ use anyhow::Result;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 const MAX_CHUNK_SIZE: usize = 1000; // characters
-const MIN_CHUNK_SIZE: usize = 100;
+const MIN_CHUNK_SIZE: usize = 10;
 
 /// Structure-aware Markdown chunker
 ///
@@ -173,16 +173,39 @@ impl MarkdownChunker {
         let content = self.current_chunk.trim();
 
         if content.len() >= MIN_CHUNK_SIZE {
-            let chunk = ChunkInfo {
-                content: content.to_string(),
-                headers: self.header_stack.clone(),
-                chunk_type: chunk_type.to_string(),
-                language: None,
-                start_line: self.chunk_start_line,
-                end_line: self.current_line,
-            };
-
-            self.chunks.push(chunk);
+            // If content is larger than MAX_CHUNK_SIZE, split it
+            if content.len() > MAX_CHUNK_SIZE {
+                let mut start = 0;
+                while start < content.len() {
+                    let end = std::cmp::min(start + MAX_CHUNK_SIZE, content.len());
+                    let slice = &content[start..end];
+                    
+                    // Only push if slice meets min size (except maybe the last part if we want to be strict, 
+                    // but usually we want all parts of a long text)
+                    // For simplicity, we'll keep all parts of a split large chunk
+                    let chunk = ChunkInfo {
+                        content: slice.to_string(),
+                        headers: self.header_stack.clone(),
+                        chunk_type: chunk_type.to_string(),
+                        language: None,
+                        start_line: self.chunk_start_line, // Note: Line numbers might be approximate for split chunks
+                        end_line: self.current_line,
+                    };
+                    self.chunks.push(chunk);
+                    
+                    start += MAX_CHUNK_SIZE;
+                }
+            } else {
+                let chunk = ChunkInfo {
+                    content: content.to_string(),
+                    headers: self.header_stack.clone(),
+                    chunk_type: chunk_type.to_string(),
+                    language: None,
+                    start_line: self.chunk_start_line,
+                    end_line: self.current_line,
+                };
+                self.chunks.push(chunk);
+            }
         }
 
         self.current_chunk.clear();
