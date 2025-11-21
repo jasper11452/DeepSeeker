@@ -22,6 +22,8 @@ fn main() {
             commands::open_file_at_line,
             commands::check_model_status,
             commands::start_watching_collections,
+            commands::update_file_incremental,
+            commands::handle_file_removal,
         ])
         .setup(|app| {
             // Initialize database on startup
