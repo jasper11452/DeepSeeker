@@ -3,10 +3,8 @@
 """
 from dataclasses import dataclass
 from typing import Optional, List, Any
-from .pdf_analyzer import PDFAnalyzer
 from .text_extractor import TextExtractor
-from .ocr_engine import OCREngine
-from .table_extractor import TableExtractor
+from .ocr_engine import OCREngine, get_ocr_engine
 from .models import ParseRequest, ParseResult
 
 class ParsingRouter:
@@ -65,44 +63,48 @@ class ParsingRouter:
 
     async def _parse_image(self, request: ParseRequest) -> ParseResult:
         """解析图片"""
-        engine = OCREngine()
+        engine = get_ocr_engine()
         return await engine.process_image(request.file_path)
 
     async def _parse_pdf_smart(self, request: ParseRequest) -> ParseResult:
         """
         智能 PDF 解析
         
-        流程：
-        1. 分析 PDF 特征（是否扫描版）
-        2. 尝试文字提取
-        3. 评估提取质量
-        4. 必要时使用 OCR
+        策略：
+        1. 快速分析 PDF 类型（扫描版/文字版）
+        2. 文字版 → PyMuPDF 直接提取（极快）
+        3. 扫描版 → OCR 处理
         """
+        from .pdf_analyzer import PDFAnalyzer
+        
+        # 1. 快速分析 PDF 类型
         analyzer = PDFAnalyzer()
         analysis = await analyzer.analyze(request.file_path)
         
-        # 判断是否为扫描版
-        if analysis.is_scanned or analysis.text_ratio < 0.1:
-            # 扫描版 → 直接 OCR
-            return await OCREngine().process_pdf(request.file_path)
+        progress_callback = request.options.get("progress_callback") if request.options else None
         
-        # 文字版 → 先尝试提取
-        extractor = TextExtractor()
-        result = await extractor.extract_pdf(request.file_path)
+        # 2. 文字版 PDF → 直接提取（快 30 倍）
+        if not analysis.is_scanned and analysis.text_ratio > 0.1:
+            if progress_callback:
+                await progress_callback("使用快速文字提取...", 10)
+            
+            extractor = TextExtractor()
+            result = await extractor.extract_pdf(request.file_path)
+            
+            # 验证提取质量
+            if self._evaluate_extraction(result) >= 0.6:
+                if progress_callback:
+                    await progress_callback("提取完成", 100)
+                return result
         
-        # 评估提取质量
-        if self._evaluate_extraction(result) < 0.6:
-            # 质量不佳 → 降级到 OCR
-            return await OCREngine().process_pdf(request.file_path)
+        # 3. 扫描版或提取质量不佳 → OCR
+        if progress_callback:
+            await progress_callback("检测到扫描版，启用 OCR...", 10)
         
-        # 提取表格（增强）
-        # TextExtractor already calls table extractor, so we might duplicate effort if we call it again?
-        # TextExtractor.extract_pdf calls extract_from_pdf.
-        # So 'result' already has tables.
-        # But let's verify if TextExtractor's tables are populated.
-        # Yes, TextExtractor.extract_pdf implementation I wrote calls TableExtractor.
-        
-        return result
+        return await get_ocr_engine().process_pdf(
+            request.file_path,
+            progress_callback=progress_callback
+        )
     
     def _evaluate_extraction(self, result: ParseResult) -> float:
         """

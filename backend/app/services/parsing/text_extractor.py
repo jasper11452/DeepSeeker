@@ -1,9 +1,11 @@
 """
 结构化文本提取器 - 使用传统方法提取文字型文档
 """
-import pypdf
+import fitz  # PyMuPDF
 import asyncio
 from typing import Optional
+import io
+from PIL import Image
 from markitdown import MarkItDown
 from .models import ParseResult
 
@@ -20,28 +22,72 @@ class TextExtractor:
         # but markitdown documentation should be checked. Assuming False is safe per plan.
         self.markitdown = MarkItDown(enable_plugins=False)
     
-    async def extract_pdf(self, file_path: str): # -> ParseResult
+    async def extract_pdf(self, file_path: str) -> ParseResult:
         """
-        提取文字型 PDF
+        提取文字型 PDF (增强版：包含嵌入图片的语义描述)
         
         策略：
-        1. 使用 pypdf 提取文字
-        2. 使用 pdfplumber 提取表格
-        3. 合并结果
+        1. 使用 fitz 提取文字（极快）
+        2. 对较大图片使用 VLM 生成语义描述（而非 OCR）
+        3. 使用 pdfplumber 提取表格
+        4. 合并结果
         """
+        import base64
+        import tempfile
+        import os
+        from ..llm import llm_service
         
-        def _extract():
-            reader = pypdf.PdfReader(file_path)
-            all_text = []
-            
-            for page_num, page in enumerate(reader.pages, 1):
-                text = page.extract_text()
-                if text and text.strip():
-                    all_text.append(f"## 第 {page_num} 页\n\n{text}")
-            
-            return "\n\n".join(all_text)
+        doc = fitz.open(file_path)
+        all_text = []
         
-        text = await asyncio.to_thread(_extract)
+        for page_num, page in enumerate(doc, 1):
+            # 1. 提取文字（同步，快速）
+            text = page.get_text()
+            
+            # 2. 收集需要描述的图片
+            image_descriptions = []
+            try:
+                image_list = page.get_images()
+                for img in image_list:
+                    xref = img[0]
+                    try:
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
+                        
+                        image = Image.open(io.BytesIO(image_bytes))
+                        if image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        
+                        # 跳过小图片（图标、装饰线等）
+                        width, height = image.size
+                        if width < 100 or height < 100:
+                            continue
+                        
+                        # 跳过过大的图片（可能是全页扫描）
+                        if width > 2000 or height > 2000:
+                            continue
+                        
+                        # 使用 VLM 描述图片
+                        image_data = base64.b64encode(image_bytes).decode('utf-8')
+                        description = await llm_service.describe_image(image_data, mode="figure")
+                        
+                        if description and not description.startswith("["):
+                            image_descriptions.append(f"\n> **[图片描述]**: {description}\n")
+                            
+                    except Exception as e:
+                        continue
+            except Exception:
+                pass
+            
+            # 组合页面内容
+            content = f"## 第 {page_num} 页\n\n{text}"
+            if image_descriptions:
+                content += "\n" + "\n".join(image_descriptions)
+            
+            all_text.append(content)
+        
+        doc.close()
+        combined_text = "\n\n".join(all_text)
         
         # 提取表格（使用 TableExtractor）
         from .table_extractor import TableExtractor
@@ -49,15 +95,15 @@ class TextExtractor:
         tables = await table_extractor.extract_from_pdf(file_path)
         
         # 提取标题
-        title = self._extract_title(text)
+        title = self._extract_title(combined_text)
         
         return ParseResult(
-            content=text,
+            content=combined_text,
             title=title,
-            metadata={"parser": "pypdf"},
+            metadata={"parser": "fitz_with_vlm"},
             tables=[t.markdown for t in tables],
             images=[],
-            parse_method="text_extraction"
+            parse_method="text_extraction_vlm"
         )
     
     async def extract_with_markitdown(self, file_path: str, 
