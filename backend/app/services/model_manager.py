@@ -1,0 +1,275 @@
+"""
+Atlas MVP - Model Manager Service
+负责模型下载、缓存和加载管理
+"""
+import os
+import logging
+from typing import Optional, Tuple, Any
+from functools import lru_cache
+
+from huggingface_hub import snapshot_download
+import mlx.core as mx
+
+from ..config import get_settings
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+class ModelManager:
+    """统一管理所有本地模型的下载和加载"""
+
+    def __init__(self):
+        self.cache_dir = settings.model_cache_dir
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        # 模型实例缓存
+        self._llm_model = None
+        self._llm_tokenizer = None
+        self._embedding_model = None
+        self._embedding_tokenizer = None
+        self._vision_model = None
+        self._vision_processor = None
+        self._vision_using_backup = False
+        
+        # 线程锁 - 防止并发加载
+        import threading
+        self._llm_lock = threading.Lock()
+        self._embedding_lock = threading.Lock()
+        self._vision_lock = threading.Lock()
+
+    def _download_model(self, model_id: str) -> str:
+        """下载模型到本地缓存目录，返回本地路径"""
+        local_dir = os.path.join(self.cache_dir, model_id.replace("/", "_"))
+        
+        if os.path.exists(local_dir) and os.listdir(local_dir):
+            logger.info(f"Model already cached: {model_id}")
+            return local_dir
+        
+        logger.info(f"Downloading model: {model_id}...")
+        try:
+            snapshot_download(
+                repo_id=model_id,
+                local_dir=local_dir,
+                local_dir_use_symlinks=False,
+            )
+            logger.info(f"Model downloaded: {model_id}")
+        except Exception as e:
+            logger.error(f"Failed to download model {model_id}: {e}")
+            raise
+        
+        return local_dir
+
+    def get_llm(self) -> Tuple[Any, Any]:
+        """获取 LLM 模型和 tokenizer（线程安全）"""
+        # 快速路径：已加载直接返回
+        if self._llm_model is not None:
+            return self._llm_model, self._llm_tokenizer
+
+        # 双重检查锁定
+        with self._llm_lock:
+            if self._llm_model is not None:
+                return self._llm_model, self._llm_tokenizer
+                
+            from mlx_lm import load
+
+            model_path = self._download_model(settings.llm_model_id)
+            logger.info(f"Loading LLM from {model_path}...")
+            
+            self._llm_model, self._llm_tokenizer = load(model_path)
+            logger.info("LLM loaded successfully")
+            
+            return self._llm_model, self._llm_tokenizer
+
+    def get_embedding_model(self) -> Tuple[Any, Any]:
+        """获取 Embedding 模型和 tokenizer（线程安全）"""
+        # 快速路径：已加载直接返回
+        if self._embedding_model is not None:
+            return self._embedding_model, self._embedding_tokenizer
+
+        # 双重检查锁定
+        with self._embedding_lock:
+            if self._embedding_model is not None:
+                return self._embedding_model, self._embedding_tokenizer
+                
+            from mlx_lm import load
+
+            model_path = self._download_model(settings.embedding_model_id)
+            logger.info(f"Loading Embedding model from {model_path}...")
+            
+            self._embedding_model, self._embedding_tokenizer = load(model_path)
+            logger.info("Embedding model loaded successfully")
+            
+            return self._embedding_model, self._embedding_tokenizer
+
+    def get_vision_model(self) -> Tuple[Any, Any, bool]:
+        """
+        获取视觉模型和 processor（线程安全）
+        返回: (model, processor, is_mlx) - is_mlx 表示是否使用 MLX 版本
+        
+        macOS 策略：优先使用 MLX-VLM（原生支持 Apple Silicon，性能更好）
+        Linux/其他：优先使用 HunyuanOCR（transformers）
+        """
+        import platform
+        
+        # 快速路径：已加载直接返回
+        if self._vision_model is not None:
+            return self._vision_model, self._vision_processor, self._vision_using_backup
+
+        # 双重检查锁定
+        with self._vision_lock:
+            if self._vision_model is not None:
+                return self._vision_model, self._vision_processor, self._vision_using_backup
+
+            is_macos = platform.system() == "Darwin"
+            
+            if is_macos:
+                # macOS: 优先使用 MLX-VLM（原生支持 Apple Silicon，避免 bfloat16 问题）
+                self._load_mlx_vision_model_with_fallback()
+            else:
+                # Linux/其他: 优先使用 HunyuanOCR
+                self._load_hunyuan_vision_model_with_fallback()
+
+            return self._vision_model, self._vision_processor, self._vision_using_backup
+
+    def _load_mlx_vision_model_with_fallback(self):
+        """加载 MLX VLM，失败则回退到 HunyuanOCR"""
+        # 优先尝试 MLX VLM
+        try:
+            from mlx_vlm import load as vlm_load
+            
+            model_path = self._download_model(settings.vision_model_backup_id)
+            logger.info(f"Loading MLX vision model from {model_path}...")
+            
+            self._vision_model, self._vision_processor = vlm_load(model_path)
+            self._vision_using_backup = True  # 标记为使用 MLX
+            logger.info("MLX vision model loaded successfully (optimized for macOS)")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load MLX vision model, falling back to HunyuanOCR: {e}")
+            
+            # 回退到 HunyuanOCR（使用 CPU float32 以避免 MPS 兼容性问题）
+            try:
+                import torch
+                from transformers import AutoProcessor, AutoModelForVision2Seq
+                
+                model_path = self._download_model(settings.vision_model_id)
+                logger.info(f"Loading HunyuanOCR vision model from {model_path} (CPU mode)...")
+                
+                self._vision_processor = AutoProcessor.from_pretrained(model_path, use_fast=False)
+                
+                # 在 macOS 上使用 CPU + float32 以避免 MPS bfloat16 问题
+                self._vision_model = AutoModelForVision2Seq.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.float32,
+                    device_map="cpu",
+                    low_cpu_mem_usage=True,
+                )
+                self._vision_using_backup = False
+                logger.info("HunyuanOCR vision model loaded on CPU (fallback)")
+                
+            except Exception as e2:
+                logger.error(f"Failed to load HunyuanOCR fallback: {e2}")
+                raise
+
+    def _load_hunyuan_vision_model_with_fallback(self):
+        """加载 HunyuanOCR，失败则回退到 MLX VLM"""
+        # 优先尝试 HunyuanOCR (transformers)
+        try:
+            import torch
+            from transformers import AutoProcessor, AutoModelForVision2Seq
+            
+            model_path = self._download_model(settings.vision_model_id)
+            logger.info(f"Loading HunyuanOCR vision model from {model_path}...")
+            
+            self._vision_processor = AutoProcessor.from_pretrained(model_path, use_fast=False)
+            
+            # 检测可用设备
+            if torch.cuda.is_available():
+                # CUDA: 使用 bfloat16
+                self._vision_model = AutoModelForVision2Seq.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto",
+                    low_cpu_mem_usage=True,
+                )
+                logger.info("HunyuanOCR loaded on CUDA with bfloat16")
+            else:
+                # CPU fallback
+                self._vision_model = AutoModelForVision2Seq.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.float32,
+                    device_map="cpu",
+                    low_cpu_mem_usage=True,
+                )
+                logger.info("HunyuanOCR loaded on CPU with float32")
+            
+            self._vision_using_backup = False
+            logger.info("HunyuanOCR vision model loaded successfully")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load HunyuanOCR, falling back to MLX vision model: {e}")
+            
+            # 回退到 MLX VLM
+            try:
+                from mlx_vlm import load as vlm_load
+                
+                model_path = self._download_model(settings.vision_model_backup_id)
+                logger.info(f"Loading MLX vision model from {model_path}...")
+                
+                self._vision_model, self._vision_processor = vlm_load(model_path)
+                self._vision_using_backup = True
+                logger.info("MLX vision model loaded successfully")
+                
+            except Exception as e2:
+                logger.error(f"Failed to load backup vision model: {e2}")
+                raise
+
+    def ensure_models_downloaded(self):
+        """确保所有模型都已下载"""
+        logger.info("Ensuring all models are downloaded...")
+        
+        try:
+            self._download_model(settings.llm_model_id)
+            logger.info(f"✓ LLM model ready: {settings.llm_model_id}")
+        except Exception as e:
+            logger.error(f"✗ LLM model failed: {e}")
+        
+        try:
+            self._download_model(settings.embedding_model_id)
+            logger.info(f"✓ Embedding model ready: {settings.embedding_model_id}")
+        except Exception as e:
+            logger.error(f"✗ Embedding model failed: {e}")
+        
+        # 视觉模型可选，优先下载主模型
+        try:
+            self._download_model(settings.vision_model_id)
+            logger.info(f"✓ Vision model ready: {settings.vision_model_id}")
+        except Exception as e:
+            logger.warning(f"✗ Primary vision model failed, trying backup: {e}")
+            try:
+                self._download_model(settings.vision_model_backup_id)
+                logger.info(f"✓ Backup vision model ready: {settings.vision_model_backup_id}")
+            except Exception as e2:
+                logger.error(f"✗ Backup vision model also failed: {e2}")
+
+    def unload_all(self):
+        """卸载所有模型，释放内存"""
+        self._llm_model = None
+        self._llm_tokenizer = None
+        self._embedding_model = None
+        self._embedding_tokenizer = None
+        self._vision_model = None
+        self._vision_processor = None
+        
+        # 清理 MLX 缓存
+        mx.metal.clear_cache()
+        
+        import gc
+        gc.collect()
+        
+        logger.info("All models unloaded")
+
+
+# 单例实例
+model_manager = ModelManager()
