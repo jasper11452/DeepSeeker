@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import { Check, Copy } from 'lucide-react';
 import 'highlight.js/styles/github-dark.css';
+import 'katex/dist/katex.min.css';
 
 // 提取代码文本内容的辅助函数
 function extractTextContent(node: React.ReactNode): string {
@@ -116,8 +119,8 @@ export function MarkdownRenderer({ content, isStreaming, className }: MarkdownRe
 
         return (
             <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeHighlight]}
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeHighlight, rehypeKatex]}
                 components={{
                     // 自定义代码渲染
                     code: InlineCode as any,

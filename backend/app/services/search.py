@@ -111,6 +111,34 @@ class HybridSearch:
             
         return ("..." if start > 0 else "") + highlighted + ("..." if end < len(content) else "")
 
+    def _analyze_query_type(self, query: str) -> Dict[str, float]:
+        """
+        Analyze query type to dynamically adjust weights.
+        Returns: {"bm25": weight, "vector": weight}
+        """
+        # Rule 1: Exact phrase with quotes -> Boost BM25
+        if '"' in query or "'" in query:
+            return {"bm25": 0.7, "vector": 0.3}
+        
+        # Rule 2: Question patterns -> Boost Vector (Semantic)
+        question_patterns = ['什么', '为什么', '如何', 'what', 'why', 'how', '?']
+        if any(p in query.lower() for p in question_patterns):
+            return {"bm25": 0.2, "vector": 0.8}
+            
+        # Rule 3: Technical/Specific terms (Simple heuristic: mixed case, hyphens) -> Boost BM25
+        # This is a basic check. Can be improved.
+        import re
+        if re.search(r'[a-zA-Z]+[0-9]+', query) or re.search(r'[A-Z]{2,}', query) or '-' in query:
+             return {"bm25": 0.5, "vector": 0.5}
+
+        # Rule 4: Short queries -> Slightly balanced
+        if len(query) < 5:
+            return {"bm25": 0.4, "vector": 0.6}
+        
+        # Default: Favor vector slightly
+        # Using settings values as base, or hardcoded defaults if settings are static
+        return {"bm25": self.bm25_weight, "vector": self.vector_weight}
+
     async def search(
         self,
         query: str,
@@ -118,6 +146,12 @@ class HybridSearch:
         document_id: Optional[int] = None,
     ) -> List[SearchResult]:
         """Perform hybrid search."""
+        
+        # Dynamic Weight Adjustment
+        weights = self._analyze_query_type(query)
+        current_bm25_weight = weights["bm25"]
+        current_vector_weight = weights["vector"]
+        
         # Get query embedding
         query_embedding = await llm_service.embed_single(query)
 
@@ -141,7 +175,7 @@ class HybridSearch:
             score = 1.0 / (60 + rank)  # RRF formula
 
             combined_scores[chunk_id] = {
-                "vector_score": score * self.vector_weight,
+                "vector_score": score * current_vector_weight,
                 "bm25_score": 0,
                 "content": vector_results["documents"][i],
                 "metadata": vector_results["metadatas"][i],
@@ -154,13 +188,13 @@ class HybridSearch:
             score = 1.0 / (60 + rank)
 
             if chunk_id in combined_scores:
-                combined_scores[chunk_id]["bm25_score"] = score * self.bm25_weight
+                combined_scores[chunk_id]["bm25_score"] = score * current_bm25_weight
             else:
                 doc = bm25_index.get_document(chunk_id)
                 if doc:
                     combined_scores[chunk_id] = {
                         "vector_score": 0,
-                        "bm25_score": score * self.bm25_weight,
+                        "bm25_score": score * current_bm25_weight,
                         "content": doc.content,
                         "metadata": doc.metadata,
                         "distance": 1.0,

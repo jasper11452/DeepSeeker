@@ -155,6 +155,12 @@ async def get_document(
     )
     chunk_count = chunk_count_result.scalar()
 
+    # Check if source file exists
+    file_exists = False
+    file_path = document.file_path or ""
+    if file_path and not file_path.startswith("note://"):
+        file_exists = os.path.exists(file_path)
+
     return {
         "id": document.id,
         "filename": document.filename,
@@ -172,12 +178,13 @@ async def get_document(
         "folder_id": document.folder_id,
         "folder": {"id": document.folder.id, "name": document.folder.name} if document.folder else None,
         "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in document.tags],
+        "file_path": file_path,
+        "file_exists": file_exists,
     }
 
 
 @router.post("/upload")
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
@@ -238,7 +245,7 @@ async def upload_document(
         
         # Trigger background task
         from ..services.background import background_processor
-        background_tasks.add_task(background_processor.process_document_task, document.id)
+        await background_processor.add_document_task(document.id)
 
         await db.commit()
 
@@ -318,7 +325,7 @@ async def create_note(
     # Index if there's content
     chunk_count = 0
     if request.content.strip():
-        chunk_count = await indexing_service.index_document(
+        chunk_count = await indexing_service.sync_document(
             document=document,
             content=request.content,
             db=db,
@@ -371,7 +378,7 @@ async def update_document(
         
         # Re-index if there's content
         if request.content.strip():
-            chunk_count = await indexing_service.index_document(
+            chunk_count = await indexing_service.sync_document(
                 document=document,
                 content=request.content,
                 db=db,

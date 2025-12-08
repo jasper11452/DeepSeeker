@@ -43,6 +43,25 @@ class BM25Index:
         text = text.lower()
         
         if HAS_JIEBA:
+            # Add technical terms to dictionary
+            tech_terms = [
+                "RAG", "LLM", "Transformer", "Embedding", "Embeddings", "FastAPI", 
+                "React", "Vue", "Next.js", "Vite", "Python", "TypeScript", "JavaScript",
+                "Docker", "Kubernetes", "Redis", "PostgreSQL", "MySQL", "MongoDB",
+                "Chroma", "ChromaDB", "Milvus", "Pinecone", "Weaviate", "Qdrant",
+                "LangChain", "LlamaIndex", "HuggingFace", "PyTorch", "TensorFlow",
+                "MLX", "Apple Silicon", "MPS", "CUDA", "GPU", "CPU",
+                "BM25", "TF-IDF", "HNSW", "IVF", "PQ", "Rerank", "Reranker",
+                "Ollama", "vLLM", "TGI", "Text Generation Inference",
+                "MarkItDown", "PDF", "Word", "Excel", "PPT", "PowerPoint",
+                "Markdown", "JSON", "XML", "YAML", "HTML", "CSS", "SQL",
+                "REST API", "GraphQL", "gRPC", "WebSocket", "SSE",
+                "Atlas", "Knowledge Base", "Vector Store", "Semantic Search",
+                "Zero-shot", "Few-shot", "Fine-tuning", "Prompt Engineering"
+            ]
+            for term in tech_terms:
+                jieba.add_word(term)
+            
             # 使用 jieba 分词
             tokens = list(jieba.cut(text))
             # 过滤：只保留有意义的词（长度>=2 或英文/数字）

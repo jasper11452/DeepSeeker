@@ -18,9 +18,15 @@ class Settings(BaseSettings):
     # LLM Configuration (Local MLX Models)
     llm_model_id: str = Field(default="mlx-community/Qwen3-4B-Instruct-2507-4bit")
     embedding_model_id: str = Field(default="mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
-    # 视觉模型：主选 HunyuanOCR (transformers)，备选 Qwen3-VL (MLX)
-    vision_model_id: str = Field(default="tencent/HunyuanOCR")
-    vision_model_backup_id: str = Field(default="lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit")
+    # 视觉模型：Qwen3-VL (MLX) - 用于图片内容描述 (Vision Describe)
+    # 注意：核心 OCR 功能已迁移至 RapidOCR，此模型仅用于生成图片的语义描述
+    vision_model_id: str = Field(default="lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit")
+    
+    # Qwen3-VL 分辨率配置
+    # 建议使用较高分辨率以获得更好的 OCR 精度
+    ocr_base_size: int = Field(default=1280)  # 长边最大尺寸
+    ocr_image_size: int = Field(default=1024)  # 目标尺寸
+    ocr_crop_mode: bool = Field(default=False)  # Qwen3-VL 不需要裁剪
     # Rerank 模型
     rerank_model_id: str = Field(default="mlx-community/Qwen3-Reranker-0.6B-4bit")
     rerank_model_path: str = Field(

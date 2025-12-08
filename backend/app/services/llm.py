@@ -170,17 +170,56 @@ class LLMService:
         return await asyncio.to_thread(self._embed_sync, texts)
 
     def _embed_sync(self, texts: List[str]) -> List[List[float]]:
-        """同步执行 MLX Embedding 计算"""
+        """Sync Execution for MLX Embedding Computation (Batch Processing)."""
+        if not texts:
+            return []
+
         with self._embedding_lock:
             model, tokenizer = model_manager.get_embedding_model()
             
             embeddings = []
-            embedding_dim = None
+            embedding_dim = None # Will determine from first successful output
             
-            for text in texts:
-                tokens = tokenizer.encode(text)
-                input_ids = mx.array([tokens])
+            BATCH_SIZE = 8
+            
+            # Helper to pad list of tokens
+            def pad_batch(batch_tokens, pad_token_id=0):
+                max_len = max(len(t) for t in batch_tokens)
+                padded = []
+                for t in batch_tokens:
+                    pad_len = max_len - len(t)
+                    padded.append(t + [pad_token_id] * pad_len)
+                return padded
+
+            for i in range(0, len(texts), BATCH_SIZE):
+                batch_texts = texts[i : i + BATCH_SIZE]
+                batch_tokens = []
                 
+                # 1. Tokenize batch
+                for text in batch_texts:
+                    try:
+                        # Ensure we don't exceed model context limit (e.g. 512 or 8192)
+                        # Truncate if necessary (naive truncation)
+                        tokens = tokenizer.encode(text)
+                        if len(tokens) > 2048:
+                            tokens = tokens[:2048]
+                        batch_tokens.append(tokens)
+                    except Exception:
+                        batch_tokens.append([])
+
+                if not batch_tokens:
+                    embeddings.extend([[]] * len(batch_texts))
+                    continue
+
+                # 2. Pad batch
+                # Assuming pad_token_id=0 if not found, usually strict usually model.config.pad_token_id
+                pad_id = getattr(tokenizer, "pad_token_id", 0)
+                if pad_id is None: pad_id = 0
+                
+                padded_tokens = pad_batch(batch_tokens, pad_id)
+                input_ids = mx.array(padded_tokens)
+                
+                # 3. Inference
                 try:
                     outputs = model.model(input_ids)
                     
@@ -188,26 +227,44 @@ class LLMService:
                         hidden_states = outputs[0]
                     else:
                         hidden_states = outputs
-
-                    embedding = mx.mean(hidden_states, axis=1)
                     
-                    if embedding_dim is None:
-                        embedding_dim = embedding.shape[-1]
+                    # 4. Pooling (Mean Pooling)
+                    # We need to ignore padding tokens in the mean calculation
+                    # Mask: 1 for real tokens, 0 for padding
+                    # Since we did manual padding, we can reconstruct mask
+                    mask = input_ids != pad_id
+                    mask = mask.astype(hidden_states.dtype).reshape(hidden_states.shape[0], hidden_states.shape[1], 1)
                     
-                    norm = mx.linalg.norm(embedding, axis=1, keepdims=True)
-                    embedding = embedding / (norm + 1e-6)
+                    # Sum(hidden * mask) / Sum(mask)
+                    masked_hidden = hidden_states * mask
+                    sum_hidden = mx.sum(masked_hidden, axis=1)
+                    sum_mask = mx.sum(mask, axis=1)
                     
-                    embeddings.append(embedding[0].tolist())
+                    # Avoid division by zero
+                    embedding_batch = sum_hidden / (sum_mask + 1e-9)
                     
+                    # 5. Normalize
+                    norm = mx.linalg.norm(embedding_batch, axis=1, keepdims=True)
+                    embedding_batch = embedding_batch / (norm + 1e-6)
+                    
+                    batch_results = embedding_batch.tolist()
+                    embeddings.extend(batch_results)
+                    
+                    # Capture dim for fallback logic
+                    if embedding_dim is None and batch_results:
+                        embedding_dim = len(batch_results[0])
+                        
                 except Exception as e:
-                    logger.error(f"Embedding computation failed: {e}")
+                    logger.error(f"Batch embedding computation failed: {e}")
+                    # Fallback or zeros
                     if embedding_dim is None:
+                         # Try to guess dim from model
                         try:
-                            embedding_dim = model.model.embed_tokens.weight.shape[-1]
-                        except Exception:
-                            embedding_dim = 1024
-                    embeddings.append([0.0] * embedding_dim)
-                    
+                             embedding_dim = model.model.embed_tokens.weight.shape[-1]
+                        except:
+                             embedding_dim = 1024
+                    embeddings.extend([[0.0] * embedding_dim] * len(batch_texts))
+
             return embeddings
 
     async def embed_single(self, text: str) -> List[float]:
@@ -271,17 +328,32 @@ class LLMService:
         except Exception:
             return text[:max_length] + "..."
 
-    async def describe_image(self, image_data: str) -> str:
-        """Describe an image using Vision LLM."""
-        return await asyncio.to_thread(self._describe_image_sync, image_data)
+    async def describe_image(self, image_data: str, mode: str = "describe") -> str:
+        """
+        使用 VLM 描述图片内容
+        
+        注意：这不是 OCR！OCR 请使用 OCREngine
+        
+        模式：
+        - "describe": 详细描述图片内容（默认）
+        - "figure": 解释图表/图形的含义
+        """
+        return await asyncio.to_thread(self._describe_image_sync, image_data, mode)
 
-    def _describe_image_sync(self, image_data: str) -> str:
-        """同步执行图像描述推理"""
+    def _describe_image_sync(self, image_data: str, mode: str = "describe") -> str:
+        """同步执行图片描述"""
         import base64
         import tempfile
         import os
         from io import BytesIO
         from PIL import Image
+        
+        PROMPTS = {
+            "describe": "Describe this image in detail, including scene, objects, and visible elements.",
+            "figure": "Explain what this chart or diagram shows. Describe its structure and meaning.",
+        }
+        
+        prompt_text = PROMPTS.get(mode, PROMPTS["describe"])
         
         temp_image_path = None
         
@@ -290,88 +362,57 @@ class LLMService:
             image_bytes = base64.b64decode(image_data)
             image = Image.open(BytesIO(image_bytes)).convert("RGB")
             
+            # Note: We skipped resizing here as it might be better to let VLM handle it or do it if memory is an issue.
+            # But the original code had `_resize_for_ocr`.
+            # I will omit it for now as per plan's simplification.
+            
             with self._vision_lock:
-                # 获取模型
-                model, processor, is_mlx = model_manager.get_vision_model()
+                # 获取 Qwen3-VL 模型
+                model, processor = model_manager.get_vision_model()
                 
-                prompt_text = "详细描述这张图片的内容，包括其中的文字、图表或关键信息。"
+                # MLX VLM 需要图片保存为临时文件
+                from mlx_vlm import generate
+                from mlx_vlm.prompt_utils import apply_chat_template
                 
-                if not is_mlx:
-                    # HunyuanOCR (Transformers) 流程
-                    import torch
-                    
-                    # HunyuanOCR 模板构造
-                    messages = [
-                        {
-                            "role": "user", 
-                            "content": [
-                                {"type": "image", "image": image},
-                                {"type": "text", "text": prompt_text}
-                            ]
-                        }
-                    ]
-                    
-                    try:
-                        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                    except Exception:
-                        text = "USER: [IMAGE] " + prompt_text + "\nASSISTANT: "
-
-                    inputs = processor(
-                        text=[text],
-                        images=image,
-                        padding=True,
-                        return_tensors="pt"
-                    )
-                    
-                    device = next(model.parameters()).device
-                    inputs = {k: v.to(device) for k, v in inputs.items()}
-                    
-                    with torch.no_grad():
-                        generated_ids = model.generate(
-                            **inputs, 
-                            max_new_tokens=1024, 
-                            do_sample=False
-                        )
-                        
-                    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                    if prompt_text in generated_text:
-                        generated_text = generated_text.split(prompt_text)[-1].strip()
-                        
-                    return generated_text
-                    
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                    temp_image_path = tmp_file.name
+                    image.save(tmp_file, format='PNG')
+                
+                # 获取模型配置
+                config = model.config if hasattr(model, 'config') else {}
+                
+                # 使用 apply_chat_template 正确格式化 prompt
+                # 这会自动插入图像 token
+                formatted_prompt = apply_chat_template(
+                    processor,
+                    config,
+                    prompt_text,
+                    num_images=1,
+                )
+                
+                # 使用 mlx_vlm.generate 进行推理
+                response = generate(
+                    model, 
+                    processor, 
+                    formatted_prompt,
+                    image=temp_image_path,
+                    max_tokens=2048,
+                    temperature=0.3,
+                )
+                
+                # 提取文本结果
+                if hasattr(response, 'text'):
+                    result = response.text
                 else:
-                    # MLX-VLM 流程
-                    from mlx_vlm import generate
-                    
-                    # MLX VLM 需要图片保存为临时文件
-                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-                        temp_image_path = tmp_file.name
-                        image.save(tmp_file, format='PNG')
-                    
-                    # 构建带图片标记的 prompt
-                    formatted_prompt = processor.apply_chat_template(
-                        [{"role": "user", "content": f"<|vision_start|><|image_pad|><|vision_end|>{prompt_text}"}],
-                        tokenize=False,
-                        add_generation_prompt=True
-                    )
-                    
-                    response = generate(
-                        model, 
-                        processor, 
-                        formatted_prompt,
-                        image=temp_image_path,
-                        max_tokens=1024,
-                        temperature=0.3
-                    )
-                    
-                    # 提取文本结果
-                    if hasattr(response, 'text'):
-                        return response.text
-                    return str(response)
+                    result = str(response)
+                
+                # 注意：不再需要复杂的后处理
+                # VLM 用于描述时输出稳定性好很多
+                return result.strip()
 
         except Exception as e:
-            logger.error(f"Image description failed: {e}")
-            return f"[Image description failed: {e}]"
+            logger.error(f"Image description failed (mode={mode}): {e}")
+            return f"[Description failed: {e}]"
         finally:
             # 清理临时文件
             if temp_image_path and os.path.exists(temp_image_path):
@@ -400,37 +441,84 @@ class LLMService:
 
     async def generate_document_title(self, content: str, filename: str = "") -> str:
         """根据文档内容智能生成标题"""
+        import re
+        
         if len(content) > 3000:
+            # 只取内容的开头和中间部分
             sample = content[:1500] + "\n...\n" + content[len(content)//2:len(content)//2+500]
         else:
             sample = content[:2000]
         
-        prompt = f"""根据以下文档内容，生成一个简洁准确的中文标题。
+        # 使用更简洁直接的 prompt
+        prompt = f"""
+为这个文档生成一个简短的标题（5-20字）。
 
 要求：
-- 标题长度在5-30字之间
-- 准确概括文档主题
-- 避免使用"文档"、"内容"等无意义词汇
-- 直接输出标题，不要有任何解释
+- 直接输出标题，不加任何解释
+- 必须是完整的主题描述
+- 中文文档用中文标题，英文文档用英文标题
 
 文档内容：
-{sample}
+{sample[:1500]}
 
-标题："""
+标题：/no_think"""
 
         try:
             response = await self.chat([
                 {"role": "user", "content": prompt}
-            ], temperature=0.3, max_tokens=60)
+            ], temperature=0.2, max_tokens=50)
             
-            title = response.strip().strip('"\'').strip()
+            title = response.strip()
             
-            if title and 3 <= len(title) <= 50:
-                return title
+            # 移除可能的思考过程
+            if '</think>' in title:
+                title = title.split('</think>')[-1].strip()
+            if '<think>' in title:
+                title = title.split('<think>')[0].strip()
             
+            # 移除引号
+            title = title.strip('"\'"\'「」『』')
+            
+            # 提取第一行（如果有多行）
+            title = title.split('\n')[0].strip()
+            
+            # 清理：移除开头的各种无效字符
+            # 包括标点、连接词、格式标记等
+            bad_starts = [
+                r'^[,，。.、;；:：!！?？\-\s#*[\]【】]+',  # 标点和格式符号
+                r'^(but|and|or|with|the|a|an|including|also|however|therefore|thus|hence|so|yet|for|to|of|in|on|at|by|as|is|are|was|were|be|been|being|have|has|had|do|does|did|will|would|could|should|may|might|must|shall|can)\s+',
+                r'^(make|making|made|it|this|that|these|those|there|here|which|what|who|how|when|where|why)\s+',
+            ]
+            for pattern in bad_starts:
+                title = re.sub(pattern, '', title, flags=re.IGNORECASE)
+            
+            title = title.strip()
+            
+            # 如果标题包含 "#"（Markdown 标题标记），提取其后的内容
+            if '#' in title:
+                # 找到最后一个 # 后的内容
+                parts = title.split('#')
+                for part in reversed(parts):
+                    cleaned = part.strip()
+                    if cleaned and len(cleaned) >= 3:
+                        title = cleaned
+                        break
+            
+            # 移除结尾的冒号和标点
+            title = re.sub(r'[:：,，。.]+$', '', title).strip()
+            
+            # 最终验证
+            if title and 3 <= len(title) <= 80:
+                # 必须包含有意义的字符（中文或英文字母）
+                if re.search(r'[a-zA-Z\u4e00-\u9fa5]', title):
+                    # 不能以常见的无意义片段开头
+                    if not re.match(r'^(more|less|better|worse|new|old|first|last|next|other|same|different)\s+', title, re.IGNORECASE):
+                        return title
+            
+            # 回退：尝试从文件名提取有意义的标题
             if filename:
-                import re
                 clean_name = re.sub(r'[_\-\d]+', ' ', filename.rsplit('.', 1)[0]).strip()
+                clean_name = ' '.join(clean_name.split())  # 合并多个空格
                 if clean_name and len(clean_name) >= 3:
                     return clean_name
             

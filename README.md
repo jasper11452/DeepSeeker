@@ -120,7 +120,7 @@ Atlas/
 | LLM 对话 | Qwen3-4B-Instruct-2507-4bit | ~2.5GB |
 | 文档嵌入 | Qwen3-Embedding-0.6B-4bit-DWQ | ~400MB |
 | 搜索重排序 | Qwen3-Reranker-0.6B-4bit | ~400MB |
-| 图像解析 | HunyuanOCR / Qwen3-VL-4B | ~2GB |
+| 图像/文档 OCR | DeepSeek-OCR-4bit (Gundam 模式) | ~2GB |
 
 ## 🔧 配置说明
 

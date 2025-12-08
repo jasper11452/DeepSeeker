@@ -19,52 +19,76 @@ class RAGService:
         self.max_chunks_per_doc = 3  # 同一文档最多保留的 chunk 数
         self.use_rerank = True  # 是否使用 rerank
 
-    def _deduplicate_and_filter(self, results: List[SearchResult]) -> List[SearchResult]:
+    async def _deduplicate_and_filter(self, results: List[SearchResult]) -> List[SearchResult]:
         """
-        智能去重和过滤：
-        1. 同一文档最多保留 max_chunks_per_doc 个 chunk
-        2. 按内容相似度去重（避免内容几乎相同的 chunk）
-        3. 过滤低相关度的结果
-        4. 动态控制数量（根据分数差距）
+        Smart deduplication and filtering (DiverseContextBuilder logic).
+        1. Limit chunks per doc.
+        2. Remove redundant chunks (content similarity).
+        3. Ensure source diversity.
         """
         if not results:
             return []
 
-        # 按分数降序排列
+        # Sort by score descending
         sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
         
-        # 最高分作为基准
+        # Thresholds
         max_score = sorted_results[0].score
+        min_documents = 3
         
         filtered = []
-        doc_chunk_count = {}  # 每个文档已选择的 chunk 数
-        seen_content_hashes = set()
+        doc_chunk_count = {}  # doc_id -> count
+        selected_contents = []
         
         for result in sorted_results:
-            # 1. 过滤低于阈值的结果
+            # 1. Score Thresholds
             if result.score < self.min_score_threshold:
                 continue
-            
-            # 2. 过滤分数远低于最高分的结果（动态截断）
             if max_score > 0 and result.score < max_score * self.score_drop_threshold:
-                break  # 后续结果分数更低，直接停止
+                break
             
-            # 3. 同一文档最多保留 max_chunks_per_doc 个 chunk
             doc_id = result.document_id
+            
+            # 2. Limit chunks per document
             current_count = doc_chunk_count.get(doc_id, 0)
             if current_count >= self.max_chunks_per_doc:
                 continue
+                
+            # 3. Redundancy Check (Jaccard Similarity for speed)
+            # Embedding check is better but requires fetching embeddings. 
+            # Using simple text overlap for now.
+            is_redundant = False
+            result_tokens = set(result.content.split())
+            if not result_tokens:
+                 continue
+                 
+            for prev_content in selected_contents:
+                prev_tokens = set(prev_content.split())
+                intersection = len(result_tokens & prev_tokens)
+                union = len(result_tokens | prev_tokens)
+                jaccard = intersection / union if union > 0 else 0
+                if jaccard > 0.6: # High overlap
+                    is_redundant = True
+                    break
             
-            # 4. 按内容去重（简单哈希）
-            content_hash = hash(result.content[:200])  # 用前200字符做哈希
-            if content_hash in seen_content_hashes:
+            if is_redundant:
                 continue
             
-            doc_chunk_count[doc_id] = current_count + 1
-            seen_content_hashes.add(content_hash)
+            # 4. Diversity Boost
+            # If we have enough chunks but not enough documents, try to skip this if it's from an already represented doc
+            # and we have other candidates from new docs?
+            # Implementation: If we are nearing limit, prioritize new docs.
+            unique_docs = len(doc_chunk_count)
+            if (len(filtered) >= self.max_context_chunks - 2 and 
+                unique_docs < min_documents and 
+                doc_id in doc_chunk_count):
+                # Skip if we already have this doc and need more diversity
+                continue
+
+            doc_chunk_count[doc_id] = doc_chunk_count.get(doc_id, 0) + 1
             filtered.append(result)
+            selected_contents.append(result.content)
             
-            # 最多保留 max_context_chunks 个高质量结果
             if len(filtered) >= self.max_context_chunks:
                 break
         
@@ -123,7 +147,7 @@ class RAGService:
         )
 
         # 2. 智能去重和过滤
-        filtered_results = self._deduplicate_and_filter(search_results)
+        filtered_results = await self._deduplicate_and_filter(search_results)
 
         # 3. Rerank 重排序
         reranked_results = await self._rerank_results(question, filtered_results)
@@ -224,7 +248,7 @@ class RAGService:
         )
 
         # 2. 智能去重和过滤
-        filtered_results = self._deduplicate_and_filter(search_results)
+        filtered_results = await self._deduplicate_and_filter(search_results)
 
         # 3. Rerank 重排序
         reranked_results = await self._rerank_results(question, filtered_results)

@@ -32,11 +32,16 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
     await init_db()
-    print("✅ Database initialized")
+    
+    from app.services.background import background_processor
+    await background_processor.start()
+    
+    print("✅ Database initialized & Background Processor Started")
     
     yield
     # Shutdown
     print("👋 Shutting down...")
+    await background_processor.stop()
 
 
 # Create FastAPI app

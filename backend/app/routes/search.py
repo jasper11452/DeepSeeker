@@ -1,9 +1,9 @@
 """
 Atlas MVP - Search API Routes
 """
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -71,3 +71,34 @@ async def quick_search(
             for r in results
         ],
     }
+
+
+@router.post("/index/rebuild")
+async def rebuild_index(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger a full index rebuild in the background."""
+    from ..services.indexing import indexing_service
+    
+    async def run_rebuild():
+        print("Starting index rebuild...")
+        try:
+            count = await indexing_service.rebuild_index()
+            print(f"Index rebuild complete. Processed {count} chunks.")
+        except Exception as e:
+            print(f"Index rebuild failed: {e}")
+        
+    background_tasks.add_task(run_rebuild)
+    
+    return {"message": "Index rebuild started in background."}
+
+
+@router.get("/index/health")
+async def check_index_health(
+    db: AsyncSession = Depends(get_db),
+):
+    """Check consistency of search indexes."""
+    from ..services.indexing import indexing_service
+    report = await indexing_service.check_consistency(db)
+    return report

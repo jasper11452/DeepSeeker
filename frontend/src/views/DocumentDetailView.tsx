@@ -1,116 +1,201 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
-import { FileText, Calendar, HardDrive, Loader2, ChevronLeft, Tag as TagIcon, Edit3, Save, X, Folder as FolderIcon, Plus } from 'lucide-react';
+import { FileText, Calendar, HardDrive, Loader2, ChevronLeft, Tag as TagIcon, Edit3, Save, X, Folder as FolderIcon, Plus, ExternalLink, AlertTriangle } from 'lucide-react';
 import { documentsApi, insightsApi, foldersApi, tagsApi } from '../lib/api';
 import { formatDate, formatFileSize, cn } from '../lib/utils';
 import { DocumentTOC } from '../components/DocumentTOC';
+import { MarkdownRenderer } from '../components/MarkdownRenderer';
 
-// Helper to generate IDs for TOC
-function generateId(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\u4e00-\u9fa5]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+// 扩展 DocumentDetail 类型以包含新增字段
+interface DocumentDetailExtended {
+  id: number;
+  filename: string;
+  title?: string;
+  file_type: string;
+  file_size: number;
+  content?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  chunk_count: number;
+  status?: string;
+  processing_message?: string;
+  processing_progress?: number;
+  folder_id?: number;
+  folder?: { id: number; name: string } | null;
+  tags?: { id: number; name: string; color: string }[];
+  file_path?: string;
+  file_exists?: boolean;
 }
 
-// Simple markdown renderer (basic formatting)
-function SimpleMarkdown({ content }: { content: string }) {
-  const lines = content.split('\n');
-  const elements: React.ReactNode[] = [];
+// 预处理 OCR 内容：清理格式问题和幻觉（保守策略）
+function preprocessOcrContent(content: string): string {
+  if (!content) return content;
 
-  let inCodeBlock = false;
-  let codeBuffer: string[] = [];
-  let codeBlockKey = 0;
+  let cleaned = content;
 
-  const renderLine = (text: string) => {
-    // Split by `code` or **bold** tokens
-    // Note: This simple split might break if nested, but sufficient for simple markdown
-    const parts = text.split(/(`[^`]+`|\*\*.*?\*\*)/g);
+  // === 0. 规范化页面分隔符格式（先于其他清理）===
+  // 将 "--- 第 X 页 ---" 格式统一转换为 "## 第 X 页"
+  cleaned = cleaned.replace(/---\s*第\s*(\d+)\s*页\s*---/g, '## 第 $1 页');
 
-    return parts.map((part, i) => {
-      if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
-        return (
-          <code key={i} className="bg-gray-100 dark:bg-dark-tertiary px-1.5 py-0.5 rounded text-sm font-mono text-pink-500 dark:text-pink-400">
-            {part.slice(1, -1)}
-          </code>
-        );
-      }
-      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-        return <strong key={i} className="font-bold text-gray-900 dark:text-white">{part.slice(2, -2)}</strong>;
-      }
-      return part;
-    });
-  };
+  // === 1. 清理幻觉行 ===
+  // 这些是 OCR 模型常见的独立成行的幻觉输出
+  // 使用更宽松的匹配：可选的句号和其他标点
+  const hallucinationLinePatterns = [
+    /^\s*markers[.\s]*$/gim,
+    /^\s*references[.\s]*$/gim,
+    /^\s*or image references[.\s]*$/gim,
+    /^\s*image references[.\s]*$/gim,
+    /^\s*or mathematical symbols[.\s]*$/gim,
+    /^\s*but make sure[^\n]*$/gim,
+    /^\s*as much as possible[.\s]*$/gim,
+    /^\s*make sure[^\n]*$/gim,
+    /^\s*please note[^\n]*$/gim,
+    /^\s*note that[^\n]*$/gim,
+    /^\s*the following[^\n]*$/gim,
+    /^\s*here is[^\n]*$/gim,
+    /^\s*below is[^\n]*$/gim,
+    /^\s*convert this[^\n]*$/gim,
+  ];
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // 多次应用清理，确保彻底
+  for (let pass = 0; pass < 3; pass++) {
+    for (const pattern of hallucinationLinePatterns) {
+      cleaned = cleaned.replace(pattern, '');
+    }
+  }
 
-    // Check for code block fence
-    if (line.trim().startsWith('```')) {
-      if (inCodeBlock) {
-        // End of block
-        elements.push(
-          <pre key={`code-${codeBlockKey++}`} className="bg-gray-900 text-gray-100 p-4 rounded-xl overflow-x-auto my-4 text-sm font-mono leading-relaxed">
-            <code>{codeBuffer.join('\n')}</code>
-          </pre>
-        );
-        codeBuffer = [];
-        inCodeBlock = false;
+  // === 2. 清理幻觉前缀 ===
+  // 清理文档开头的幻觉（以逗号开头的不完整句子）
+  cleaned = cleaned.replace(/^[\s,]*,?\s*including[^.#\n]*[.。]?\s*/i, '');
+  cleaned = cleaned.replace(/^[\s,]*,?\s*such as[^.#\n]*[.。]?\s*/i, '');
+
+  // 清理行首的幻觉前缀（幻觉词汇后跟着有效内容）
+  // 如 "or image references. ### Table"
+  const linePrefixHallucinations = [
+    /^or image references[.\s]+/gim,
+    /^or mathematical symbols[.\s]+/gim,
+    /^image references[.\s]+/gim,
+    /^references[.\s]+(?=[#\*A-Z])/gim,
+    /^markers[.\s]+(?=[#\*A-Z])/gim,
+  ];
+  for (const pattern of linePrefixHallucinations) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+
+  // 清理每个 "## 第 X 页" 后的幻觉
+  // 使用更强力的清理：匹配所有已知的幻觉词汇
+  const pageHallucinationPattern = /(##\s*第\s*\d+\s*页)\s*\n\n?\s*(markers|references|or image references|image references|or mathematical symbols)[.\s]*\n*/gi;
+  // 多次应用以确保全部清理
+  for (let i = 0; i < 5; i++) {
+    cleaned = cleaned.replace(pageHallucinationPattern, '$1\n\n');
+  }
+
+  // 额外清理：逗号开头的片段
+  cleaned = cleaned.replace(
+    /(##\s*第\s*\d+\s*页)\s*\n\n[\s,]*,?\s*including[^.#\n]*[.。]?\s*/gi,
+    '$1\n\n'
+  );
+  cleaned = cleaned.replace(
+    /(##\s*第\s*\d+\s*页)\s*\n\n[\s,]*,?\s*such as[^.#\n]*[.。]?\s*/gi,
+    '$1\n\n'
+  );
+  cleaned = cleaned.replace(
+    /(##\s*第\s*\d+\s*页)\s*\n\n[\s,]*,\s*[a-z][^.#\n]*[.。]\s*/gi,
+    '$1\n\n'
+  );
+
+  // === 3. 移除重复的表格 ===
+  // 检测并移除连续重复的 Markdown 表格
+  const tablePattern = /(\|[^\n]+\|\n(?:\|[-:|\s]+\|\n)?(?:\|[^\n]+\|\n)*)/g;
+  const tables = cleaned.match(tablePattern);
+  if (tables) {
+    const seenTables = new Set<string>();
+    for (const table of tables) {
+      // 用表格前两行作为指纹
+      const lines = table.trim().split('\n');
+      const fingerprint = lines.slice(0, 2).join('\n').toLowerCase().replace(/\s+/g, ' ');
+
+      if (seenTables.has(fingerprint)) {
+        // 移除重复表格，只保留一次
+        cleaned = cleaned.replace(table, '');
       } else {
-        // Start of block
-        inCodeBlock = true;
+        seenTables.add(fingerprint);
       }
-      continue;
     }
-
-    if (inCodeBlock) {
-      codeBuffer.push(line);
-      continue;
-    }
-
-    // Normal rendering
-    if (line.startsWith('### ')) {
-      const text = line.slice(4);
-      elements.push(<h3 id={generateId(text)} key={i} className="text-lg font-semibold text-gray-900 dark:text-white mt-6 mb-2 scroll-mt-20">{text}</h3>);
-      continue;
-    }
-    if (line.startsWith('## ')) {
-      const text = line.slice(3);
-      elements.push(<h2 id={generateId(text)} key={i} className="text-xl font-bold text-gray-900 dark:text-white mt-8 mb-3 scroll-mt-20">{text}</h2>);
-      continue;
-    }
-    if (line.startsWith('# ')) {
-      const text = line.slice(2);
-      elements.push(<h1 id={generateId(text)} key={i} className="text-2xl font-bold text-gray-900 dark:text-white mt-8 mb-4 scroll-mt-20">{text}</h1>);
-      continue;
-    }
-    if (line.startsWith('- ') || line.startsWith('* ')) {
-      elements.push(<div key={i} className="flex gap-2 ml-2"><span className="text-accent-primary">•</span><p className="text-gray-700 dark:text-gray-300">{renderLine(line.slice(2))}</p></div>);
-      continue;
-    }
-    if (line.startsWith('> ')) {
-      elements.push(<blockquote key={i} className="border-l-4 border-accent-primary pl-4 py-1 my-2 bg-gray-50 dark:bg-dark-secondary/30 rounded-r text-gray-600 dark:text-gray-400 italic">{renderLine(line.slice(2))}</blockquote>);
-      continue;
-    }
-    if (line.trim() === '') {
-      elements.push(<div key={i} className="h-2" />);
-      continue;
-    }
-
-    elements.push(<p key={i} className="text-gray-700 dark:text-gray-300 leading-relaxed min-h-[1.5em]">{renderLine(line)}</p>);
   }
 
-  // Handle unclosed code block (fallback)
-  if (inCodeBlock && codeBuffer.length > 0) {
-    elements.push(
-      <pre key={`code-${codeBlockKey++}`} className="bg-gray-900 text-gray-100 p-4 rounded-xl overflow-x-auto my-4 text-sm font-mono leading-relaxed">
-        <code>{codeBuffer.join('\n')}</code>
-      </pre>
-    );
-  }
+  // === 3.5. 清理 OCR 重复循环模式 ===
+  // 这是 OCR 模型常见的循环输出问题
+  // ### Result + **Verification** 循环
+  cleaned = cleaned.replace(/(### Result\s*\n\s*\*\*Verification\*\*\s*\n\s*){3,}/g, '$1');
+  // 连续相同的 Markdown 标题
+  cleaned = cleaned.replace(/(###\s*[^\n]+\n\s*){5,}/g, '$1');
+  cleaned = cleaned.replace(/(\*\*[^\*\n]+\*\*\s*\n\s*){5,}/g, '$1');
 
-  return <div className="space-y-2">{elements}</div>;
+  // === 4. 规范化空行 ===
+  // 合并连续的多个空行为最多两个空行
+  cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n');
+
+  // 清理 Markdown 标题前后的多余空行
+  cleaned = cleaned.replace(/\n{3,}(#{1,6}\s)/g, '\n\n$1');
+  cleaned = cleaned.replace(/(#{1,6}\s[^\n]+)\n{3,}/g, '$1\n\n');
+
+  // === 5. 转换 LaTeX 公式格式 ===
+  // OCR 输出的公式格式可能是 (\...) 或 \(...\) 而不是标准的 $...$
+  // 转换块级公式：\[...\] -> $$...$$
+  cleaned = cleaned.replace(/\\\[([\\s\\S]*?)\\\]/g, '$$$$1$$');
+
+  // 转换内联公式：\(...\) -> $...$
+  cleaned = cleaned.replace(/\\\((.*?)\\\)/g, '$$$1$$');
+
+  // 转换包含 LaTeX 命令的 (...) -> $...$
+  cleaned = cleaned.replace(/\(([^()]*\\[a-zA-Z][^()]*)\)/g, (match, content) => {
+    // 检查是否包含 LaTeX 命令
+    if (/\\[a-zA-Z]+/.test(content)) {
+      return `$${content}$`;
+    }
+    return match; // 不是 LaTeX，保持原样
+  });
+
+  // === 6. 清理特殊字符 ===
+  // 移除一些常见的 OCR 错误字符
+  cleaned = cleaned.replace(/\u00a0/g, ' '); // 不间断空格 -> 普通空格
+  cleaned = cleaned.replace(/\u200b/g, '');  // 零宽空格
+  cleaned = cleaned.replace(/\ufeff/g, '');  // BOM
+
+  // 合并行内多个连续空格为单个（不影响换行）
+  cleaned = cleaned.split('\n').map(line => {
+    // 对于表格行，保留格式
+    if (line.trim().startsWith('|') || line.includes(' | ')) {
+      return line;
+    }
+    // 对于代码块标记，保留原样
+    if (line.trim().startsWith('```')) {
+      return line;
+    }
+    // 对于包含 LaTeX 公式的行，保留原样
+    if (line.includes('$')) {
+      return line;
+    }
+    // 其他行：清理多余空格但保留缩进
+    const leadingSpaces = line.match(/^(\s*)/)?.[1] || '';
+    const rest = line.slice(leadingSpaces.length).replace(/  +/g, ' ');
+    return leadingSpaces + rest;
+  }).join('\n');
+
+  return cleaned.trim();
+}
+
+// 文档内容渲染器：预处理后使用 MarkdownRenderer 渲染
+function DocumentContent({ content }: { content: string }) {
+  // 预处理 OCR 内容
+  const processedContent = useMemo(() => {
+    return preprocessOcrContent(content);
+  }, [content]);
+
+  return <MarkdownRenderer content={processedContent} className="document-content" />;
 }
 
 export function DocumentDetailView() {
@@ -126,9 +211,9 @@ export function DocumentDetailView() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
-  const { data: document, isLoading, error, refetch } = useQuery({
+  const { data: document, isLoading, error, refetch } = useQuery<DocumentDetailExtended>({
     queryKey: ['document', documentId],
-    queryFn: () => documentsApi.get(documentId),
+    queryFn: () => documentsApi.get(documentId) as Promise<DocumentDetailExtended>,
     enabled: documentId > 0,
     refetchInterval: (query) => {
       // Poll if document is processing
@@ -333,7 +418,7 @@ export function DocumentDetailView() {
               </h1>
             )}
 
-            <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
               <div className="flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5" />
                 <span>{formatDate(document.created_at)}</span>
@@ -346,6 +431,34 @@ export function DocumentDetailView() {
                 <TagIcon className="w-3.5 h-3.5" />
                 <span>{document.chunk_count} 个分块</span>
               </div>
+
+              {/* 源文件路径显示 */}
+              {document.file_path && !document.file_path.startsWith('note://') && (
+                <div className="flex items-center gap-1.5">
+                  {document.file_exists ? (
+                    <>
+                      <ExternalLink className="w-3.5 h-3.5 text-accent-primary" />
+                      <span
+                        className="text-accent-primary hover:underline cursor-pointer max-w-[300px] truncate"
+                        title={`源文件路径: ${document.file_path}\n点击复制路径`}
+                        onClick={() => {
+                          navigator.clipboard.writeText(document.file_path || '');
+                          // 可以添加一个 toast 提示"路径已复制"
+                        }}
+                      >
+                        📁 {document.file_path.split('/').pop()}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                      <span className="text-amber-500" title={`源文件已删除: ${document.file_path}`}>
+                        源文件已删除
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Tags Section */}
@@ -476,9 +589,8 @@ export function DocumentDetailView() {
                     <p className="text-gray-500 dark:text-gray-400 mb-4">{document.processing_message}</p>
                   </div>
                 ) : document.content ? (
-                  document.file_type === 'md'
-                    ? <SimpleMarkdown content={document.content} />
-                    : <pre className="whitespace-pre-wrap font-sans text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{document.content}</pre>
+                  // 对所有文档类型都使用增强的 markdown 渲染
+                  <DocumentContent content={document.content} />
                 ) : (
                   <div className="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
                     <FileText className="w-16 h-16 mb-4 opacity-50" />

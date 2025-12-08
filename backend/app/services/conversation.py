@@ -169,7 +169,7 @@ class ConversationService:
                 await self.db.execute(delete(Chunk).where(Chunk.document_id == doc.id))
                 
                 # 重新索引
-                chunk_count = await indexing_service.index_document(
+                chunk_count = await indexing_service.sync_document(
                     document=doc,
                     content=conversation_content,
                     db=self.db,
@@ -195,7 +195,7 @@ class ConversationService:
         await self.db.flush()
         
         # 索引文档
-        chunk_count = await indexing_service.index_document(
+        chunk_count = await indexing_service.sync_document(
             document=doc,
             content=conversation_content,
             db=self.db,
