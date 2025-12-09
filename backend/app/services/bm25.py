@@ -1,5 +1,5 @@
 """
-Atlas MVP - BM25 Search Index
+DeepSeeker MVP - BM25 Search Index
 """
 import re
 from typing import List, Dict, Any, Optional, Tuple
@@ -56,7 +56,7 @@ class BM25Index:
                 "MarkItDown", "PDF", "Word", "Excel", "PPT", "PowerPoint",
                 "Markdown", "JSON", "XML", "YAML", "HTML", "CSS", "SQL",
                 "REST API", "GraphQL", "gRPC", "WebSocket", "SSE",
-                "Atlas", "Knowledge Base", "Vector Store", "Semantic Search",
+                "DeepSeeker", "Knowledge Base", "Vector Store", "Semantic Search",
                 "Zero-shot", "Few-shot", "Fine-tuning", "Prompt Engineering"
             ]
             for term in tech_terms:

@@ -1,5 +1,5 @@
 """
-Atlas MVP - Search API Routes
+DeepSeeker MVP - Search API Routes
 """
 from typing import Optional, Dict, Any
 

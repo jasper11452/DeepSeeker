@@ -1,5 +1,5 @@
 """
-Atlas MVP - Routes Module
+DeepSeeker MVP - Routes Module
 """
 from .documents import router as documents_router
 from .search import router as search_router

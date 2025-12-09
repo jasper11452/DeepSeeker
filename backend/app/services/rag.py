@@ -1,5 +1,5 @@
 """
-Atlas MVP - RAG (Retrieval Augmented Generation) Service
+DeepSeeker MVP - RAG (Retrieval Augmented Generation) Service
 """
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -168,7 +168,7 @@ class RAGService:
         context = "\n\n---\n\n".join(context_parts)
 
         # 5. Build messages with improved prompt
-        system_prompt = """你是 Atlas 智能知识助手，专门基于用户的知识库内容回答问题。
+        system_prompt = """你是 DeepSeeker 智能知识助手，专门基于用户的知识库内容回答问题。
 
 回答规则：
 1. 仔细阅读所有提供的上下文，综合分析后给出准确答案
@@ -268,7 +268,7 @@ class RAGService:
         context = "\n\n---\n\n".join(context_parts)
 
         # 5. Build messages with improved prompt
-        system_prompt = """你是 Atlas 智能知识助手，专门基于用户的知识库内容回答问题。
+        system_prompt = """你是 DeepSeeker 智能知识助手，专门基于用户的知识库内容回答问题。
 
 回答规则：
 1. 仔细阅读所有提供的上下文，综合分析后给出准确答案

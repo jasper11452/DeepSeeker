@@ -1,5 +1,5 @@
 """
-Atlas MVP - Configuration
+DeepSeeker MVP - Configuration
 """
 import os
 from functools import lru_cache

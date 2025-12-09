@@ -1,5 +1,5 @@
 """
-Atlas MVP - Vector Store Service (ChromaDB)
+DeepSeeker MVP - Vector Store Service (ChromaDB)
 """
 from typing import List, Optional, Dict, Any
 import chromadb

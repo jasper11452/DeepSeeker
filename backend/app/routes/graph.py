@@ -1,5 +1,5 @@
 """
-Atlas MVP - Knowledge Graph API Routes
+DeepSeeker MVP - Knowledge Graph API Routes
 """
 from typing import List, Dict, Any
 

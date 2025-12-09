@@ -1,5 +1,5 @@
 """
-Atlas MVP - Services Module
+DeepSeeker MVP - Services Module
 """
 from .parser import DocumentParser, parser
 from .llm import LLMService, llm_service

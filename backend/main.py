@@ -1,5 +1,5 @@
 """
-Atlas MVP - Main Application Entry Point
+DeepSeeker MVP - Main Application Entry Point
 """
 import os
 from contextlib import asynccontextmanager
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Atlas",
+    title="DeepSeeker",
     description="智能个人知识管理系统",
     version="0.1.0",
     lifespan=lifespan,

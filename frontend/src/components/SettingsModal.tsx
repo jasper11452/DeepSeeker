@@ -130,7 +130,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                     <div className="flex items-center justify-between py-3 border-b border-subtle">
                       <div>
                         <div className="text-sm text-gray-900 dark:text-white">开机自动启动</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">登录时自动启动 Atlas</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">登录时自动启动 DeepSeeker</div>
                       </div>
                       <ToggleSwitch enabled={false} onChange={() => { }} />
                     </div>
@@ -238,7 +238,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                     <div className="flex items-center justify-between py-3 border-b border-subtle">
                       <div>
                         <div className="text-sm text-gray-900 dark:text-white">上下文感知</div>
-                        <div className="text-xs text-gray-500">允许 Atlas 感知当前窗口和编辑内容</div>
+                        <div className="text-xs text-gray-500">允许 DeepSeeker 感知当前窗口和编辑内容</div>
                       </div>
                       <ToggleSwitch
                         enabled={settings.contextAwareness}
@@ -248,7 +248,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                     <div className="flex items-center justify-between py-3 border-b border-subtle">
                       <div>
                         <div className="text-sm text-gray-900 dark:text-white">剪贴板读取</div>
-                        <div className="text-xs text-gray-500">允许 Atlas 读取剪贴板内容提供相关建议</div>
+                        <div className="text-xs text-gray-500">允许 DeepSeeker 读取剪贴板内容提供相关建议</div>
                       </div>
                       <ToggleSwitch
                         enabled={settings.clipboardRead}
@@ -279,7 +279,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                     <div className="flex items-center justify-between py-3 border-b border-subtle">
                       <div>
                         <div className="text-sm text-gray-900 dark:text-white">主动辅助</div>
-                        <div className="text-xs text-gray-500">允许 Atlas 主动提供建议和关联信息</div>
+                        <div className="text-xs text-gray-500">允许 DeepSeeker 主动提供建议和关联信息</div>
                       </div>
                       <ToggleSwitch
                         enabled={settings.proactiveAssist}
@@ -317,7 +317,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                   <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-accent-primary to-emerald-500 flex items-center justify-center">
                     <span className="text-2xl font-bold text-white">A</span>
                   </div>
-                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-1">Atlas</h3>
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-1">DeepSeeker</h3>
                   <p className="text-sm text-gray-500">智能个人知识管理应用</p>
                   <p className="text-xs text-gray-600 mt-2">版本 0.1.0 (MVP)</p>
                 </div>

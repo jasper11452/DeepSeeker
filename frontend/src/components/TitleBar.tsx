@@ -17,7 +17,7 @@ export function TitleBar() {
           <div className="w-6 h-6 rounded-md bg-gradient-to-br from-accent-primary to-emerald-500 flex items-center justify-center">
             <span className="text-xs font-bold text-white">A</span>
           </div>
-          <span className="text-sm font-semibold text-gray-900 dark:text-white">Atlas</span>
+          <span className="text-sm font-semibold text-gray-900 dark:text-white">DeepSeeker</span>
         </div>
       </div>
     </header>

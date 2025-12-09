@@ -1,5 +1,5 @@
 """
-Atlas MVP - Hybrid Search Service
+DeepSeeker MVP - Hybrid Search Service
 """
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass

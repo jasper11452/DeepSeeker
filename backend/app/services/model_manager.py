@@ -1,5 +1,5 @@
 """
-Atlas MVP - Model Manager Service
+DeepSeeker MVP - Model Manager Service
 负责模型下载、缓存和加载管理
 """
 import os

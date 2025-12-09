@@ -1,5 +1,5 @@
 """
-Atlas MVP - Document Parser Service (重构版)
+DeepSeeker MVP - Document Parser Service (重构版)
 
 核心变更：
 1. 引入分层解析架构

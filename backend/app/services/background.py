@@ -1,5 +1,5 @@
 """
-Atlas MVP - Background Tasks
+DeepSeeker MVP - Background Tasks
 """
 import asyncio
 import logging

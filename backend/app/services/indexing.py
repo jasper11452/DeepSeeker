@@ -1,5 +1,5 @@
 """
-Atlas MVP - Indexing Service
+DeepSeeker MVP - Indexing Service
 """
 from typing import List
 

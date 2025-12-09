@@ -1,5 +1,5 @@
 """
-Atlas MVP - App Module
+DeepSeeker MVP - App Module
 """
 from .config import get_settings, Settings
 from .database import get_db, init_db, get_db_context, Base

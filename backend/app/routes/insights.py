@@ -1,5 +1,5 @@
 """
-Atlas - 智能洞察 API Routes
+DeepSeeker - 智能洞察 API Routes
 提供文档摘要、关键词、chunk详情等功能
 """
 from fastapi import APIRouter, Depends, HTTPException

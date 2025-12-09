@@ -1,8 +1,8 @@
-# Atlas - 本地 RAG 知识管理系统
+# DeepSeeker - 本地 RAG 知识管理系统
 
 <div align="center">
 
-![Atlas](https://img.shields.io/badge/Atlas-RAG%20Knowledge%20Manager-blue?style=for-the-badge)
+![DeepSeeker](https://img.shields.io/badge/DeepSeeker-RAG%20Knowledge%20Manager-blue?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-green?style=flat-square&logo=python)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?style=flat-square&logo=typescript)
 ![MLX](https://img.shields.io/badge/MLX-Apple%20Silicon-orange?style=flat-square&logo=apple)
@@ -136,7 +136,7 @@ npm run dev
 ## 📁 项目结构
 
 ```
-Atlas/
+DeepSeeker/
 ├── backend/                 # 后端 FastAPI 应用
 │   ├── app/
 │   │   ├── models/         # 数据库模型

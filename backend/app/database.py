@@ -1,5 +1,5 @@
 """
-Atlas MVP - Database Configuration
+DeepSeeker MVP - Database Configuration
 """
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator

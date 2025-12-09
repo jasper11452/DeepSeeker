@@ -1,5 +1,5 @@
 """
-Atlas MVP - Chat API Routes
+DeepSeeker MVP - Chat API Routes
 """
 from typing import Optional, List
 

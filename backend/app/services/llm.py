@@ -1,5 +1,5 @@
 """
-Atlas MVP - LLM Service (Local MLX & Transformers)
+DeepSeeker MVP - LLM Service (Local MLX & Transformers)
 """
 import logging
 import asyncio
