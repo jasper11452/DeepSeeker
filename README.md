@@ -32,14 +32,42 @@
 
 ## 📦 安装
 
-### 1. 克隆项目
+### 🚀 一键安装（推荐）
+
+```bash
+# 克隆项目
+git clone https://github.com/jasper11452/DeepSeeker.git
+cd DeepSeeker
+
+# 运行一键安装脚本
+./setup.sh
+
+# 如果网络受限，使用国内镜像源
+./setup.sh --mirror
+```
+
+一键安装脚本会自动完成：
+- ✅ 系统环境检测（macOS Apple Silicon、Python、Node.js）
+- ✅ 安装 uv 包管理器
+- ✅ 创建 Python 虚拟环境
+- ✅ 安装后端 Python 依赖
+- ✅ 安装前端 Node.js 依赖
+- ✅ 下载所有 AI 模型（约 5-6GB）
+- ✅ 初始化数据库
+
+### 手动安装
+
+<details>
+<summary>点击展开手动安装步骤</summary>
+
+#### 1. 克隆项目
 
 ```bash
 git clone https://github.com/jasper11452/DeepSeeker.git
 cd DeepSeeker
 ```
 
-### 2. 后端设置
+#### 2. 后端设置
 
 ```bash
 cd backend
@@ -56,7 +84,7 @@ cp .env.example .env
 # 根据需要编辑 .env 文件
 ```
 
-### 3. 前端设置
+#### 3. 前端设置
 
 ```bash
 cd frontend
@@ -65,21 +93,43 @@ cd frontend
 npm install
 ```
 
+</details>
+
 ## 🚀 运行
 
-### 启动后端
+### 一键启动（推荐）
+
+```bash
+# 启动服务
+./start.sh
+
+# 停止服务
+./stop.sh
+```
+
+启动后会自动打开浏览器访问 http://localhost:5173
+
+### 手动启动
+
+<details>
+<summary>点击展开手动启动步骤</summary>
+
+#### 启动后端
 
 ```bash
 cd backend
+source .venv/bin/activate
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 启动前端
+#### 启动前端
 
 ```bash
 cd frontend
 npm run dev
 ```
+
+</details>
 
 访问 http://localhost:5173 即可使用。
 
