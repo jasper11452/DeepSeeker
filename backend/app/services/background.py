@@ -87,7 +87,9 @@ class BackgroundProcessor:
     """Service for handling background document processing using TaskQueue."""
     
     def __init__(self):
-        self.task_queue = TaskQueue(max_concurrent=2)
+        # 设为 1 避免多个 GPU 模型同时运行导致 MPS 冲突
+        # (Unstructured/Nougat/Embedding 都使用 GPU)
+        self.task_queue = TaskQueue(max_concurrent=1)
 
     async def start(self):
         await self.task_queue.start()

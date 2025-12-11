@@ -139,24 +139,24 @@ class ModelManager:
         """确保所有模型都已下载"""
         logger.info("Ensuring all models are downloaded...")
         
-        try:
-            self._download_model(settings.llm_model_id)
-            logger.info(f"✓ LLM model ready: {settings.llm_model_id}")
-        except Exception as e:
-            logger.error(f"✗ LLM model failed: {e}")
+        # try:
+        #     self._download_model(settings.llm_model_id)
+        #     logger.info(f"✓ LLM model ready: {settings.llm_model_id}")
+        # except Exception as e:
+        #     logger.error(f"✗ LLM model failed: {e}")
         
-        try:
-            self._download_model(settings.embedding_model_id)
-            logger.info(f"✓ Embedding model ready: {settings.embedding_model_id}")
-        except Exception as e:
-            logger.error(f"✗ Embedding model failed: {e}")
+        # try:
+        #     self._download_model(settings.embedding_model_id)
+        #     logger.info(f"✓ Embedding model ready: {settings.embedding_model_id}")
+        # except Exception as e:
+        #     logger.error(f"✗ Embedding model failed: {e}")
         
-        # 视觉模型 DeepSeek-OCR
-        try:
-            self._download_model(settings.vision_model_id)
-            logger.info(f"✓ Vision model ready: {settings.vision_model_id}")
-        except Exception as e:
-            logger.error(f"✗ Vision model failed: {e}")
+        # # 视觉模型 DeepSeek-OCR
+        # try:
+        #     self._download_model(settings.vision_model_id)
+        #     logger.info(f"✓ Vision model ready: {settings.vision_model_id}")
+        # except Exception as e:
+        #     logger.error(f"✗ Vision model failed: {e}")
 
     def unload_all(self):
         """卸载所有模型，释放内存"""

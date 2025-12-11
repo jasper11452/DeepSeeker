@@ -102,7 +102,8 @@ start_backend() {
     source .venv/bin/activate
     
     # 后台启动后端
-    DISABLE_MODEL_SOURCE_CHECK=True nohup uv run uvicorn main:app --host 0.0.0.0 --port 8000 > "${PROJECT_ROOT}/backend.log" 2>&1 &
+    export UV_ENV_FILE="${BACKEND_DIR}/.env"
+    nohup uv run uvicorn main:app --host 0.0.0.0 --port 8000 > "${PROJECT_ROOT}/backend.log" 2>&1 &
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
     

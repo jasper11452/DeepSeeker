@@ -140,6 +140,40 @@ npm run electron:dev
 
 ---
 
+## 文档解析方案
+
+### Unstructured + Nougat 组合（默认/推荐）
+
+这是学术界 2024-2025 的标配方案，公式还原准确率可达 95%+。
+
+```python
+# 解析流程
+1. Unstructured (hi_res) -> 提取文本、表格、图片、公式图像
+2. Nougat (facebook/nougat-base) -> 将公式图像转换为 LaTeX
+3. 合并 -> 生成带完美 LaTeX 的 Markdown
+```
+
+安装方式：
+```bash
+cd backend
+chmod +x install_nougat.sh
+./install_nougat.sh
+```
+
+### 可选解析策略
+
+| 策略 | 适用场景 | 速度 | 精度 |
+|--------|----------|------|------|
+| `unstructured_nougat` | 学术论文、公式密集型 | 中 | ★★★★★ |
+| `nougat_full` | 需要最高精度 LaTeX | 慢 | ★★★★★ |
+| `text_extraction` | 文字版 PDF | 极快 | ★★★ |
+| `ocr` | 扫描版 PDF | 中 | ★★★★ |
+| `auto` | 自动选择 | 变化 | 变化 |
+
+配置方式：在 `.env` 文件中设置 `PDF_PARSE_STRATEGY=unstructured_nougat`
+
+---
+
 ## 技术架构
 
 ```

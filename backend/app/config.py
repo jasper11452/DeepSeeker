@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=800)
     chunk_overlap: int = Field(default=150)
     max_upload_size: int = Field(default=52428800)  # 50MB
+    
+    # PDF 解析策略
+    # 可选值：
+    #   - "auto": 自动选择（根据文档特征）
+    #   - "unstructured_nougat": Unstructured + Nougat（公式密集型首选，学术论文推荐）
+    #   - "nougat_full": 纯 Nougat 全页解析（最高精度，但较慢）
+    #   - "ocr": PaddleOCR（扫描版 PDF）
+    #   - "text_extraction": PyMuPDF 快速提取（文字版 PDF）
+    pdf_parse_strategy: str = Field(default="unstructured_nougat")
 
     # Search Settings
     top_k_retrieval: int = Field(default=20)

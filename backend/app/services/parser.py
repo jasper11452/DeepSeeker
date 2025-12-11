@@ -11,7 +11,7 @@ from typing import List, Optional
 from dataclasses import dataclass, field
 
 from ..config import get_settings
-from .parsing.router import ParsingRouter, ParseRequest, ParseResult
+from .parsing.router import ParsingRouter, ParseRequest, ParseResult, ParseStrategy
 
 settings = get_settings()
 
@@ -47,7 +47,13 @@ class DocumentParser:
     def __init__(self):
         self.chunk_size = settings.chunk_size
         self.chunk_overlap = settings.chunk_overlap
-        self.router = ParsingRouter()
+        
+        # 根据配置选择 PDF 解析策略
+        pdf_strategy = settings.pdf_parse_strategy
+        if pdf_strategy == "auto":
+            pdf_strategy = None  # 自动选择
+        
+        self.router = ParsingRouter(default_pdf_strategy=pdf_strategy)
 
     async def parse(self, file_path: str, file_type: str,
                     update_progress_callback=None) -> ParsedDocument:

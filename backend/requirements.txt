@@ -15,15 +15,25 @@ chromadb>=0.4.22
 # BM25 Search
 rank-bm25>=0.2.2
 
-# Document Parsing
+# Document Parsing - 基础
 pypdf>=4.0.0
 markdown>=3.5.2
 beautifulsoup4>=4.12.3
 markitdown[all]
-paddlepaddle>=2.6.0
-paddleocr>=2.7.0
 pdfplumber>=0.10.0
 opencv-python-headless>=4.8.0
+
+# Document Parsing - PaddleOCR (扫描版 PDF)
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0
+
+# Document Parsing - Unstructured + Nougat (公式密集型，学术论文首选)
+# 安装说明：
+#   pip install "unstructured[pdf]" --break-system-packages
+#   pip install nougat-ocr transformers --break-system-packages
+unstructured[pdf]>=0.12.0
+# Nougat 依赖 transformers 和 torch
+nougat-ocr>=0.1.0
 
 # HTTP Client
 httpx>=0.26.0
@@ -55,9 +65,12 @@ hdbscan>=0.8.33
 networkx>=3.2.0
 numpy>=1.24.0
 
-# PyTorch (用于某些模型)
+# PyTorch (用于 Nougat 和其他模型)
 torch
 torchvision
 
 # Text Processing
 jieba>=0.42.1
+
+# Pillow (图像处理)
+Pillow>=10.0.0

@@ -3,6 +3,11 @@ DeepSeeker - AI 研究助手
 Main Application Entry Point
 """
 import os
+
+# 设置环境变量（必须在导入其他模块之前）
+os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"  # 加快启动速度
+os.environ["TOKENIZERS_PARALLELISM"] = "false"      # 避免多线程警告
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
