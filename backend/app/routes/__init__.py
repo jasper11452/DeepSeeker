@@ -1,5 +1,5 @@
 """
-DeepSeeker MVP - Routes Module
+DeepSeeker - Routes Module
 """
 from .documents import router as documents_router
 from .search import router as search_router
@@ -9,6 +9,7 @@ from .conversations import router as conversations_router
 from .insights import router as insights_router
 from .folders import router as folders_router
 from .tags import router as tags_router
+from .research import router as research_router
 
 __all__ = [
     "documents_router",
@@ -19,4 +20,5 @@ __all__ = [
     "insights_router",
     "folders_router",
     "tags_router",
+    "research_router",
 ]

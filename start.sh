@@ -34,7 +34,7 @@ print_banner() {
     echo "║       ██║  ██║   ██║   ███████╗██║  ██║███████║               ║"
     echo "║       ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝               ║"
     echo "║                                                               ║"
-    echo "║           本地 RAG 知识管理系统 - 启动脚本                      ║"
+    echo "║           AI 研究助手 - 启动脚本                                 ║"
     echo "║                                                               ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -102,7 +102,7 @@ start_backend() {
     source .venv/bin/activate
     
     # 后台启动后端
-    nohup uv run uvicorn main:app --host 0.0.0.0 --port 8000 > "${PROJECT_ROOT}/backend.log" 2>&1 &
+    DISABLE_MODEL_SOURCE_CHECK=True nohup uv run uvicorn main:app --host 0.0.0.0 --port 8000 > "${PROJECT_ROOT}/backend.log" 2>&1 &
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
     
@@ -134,7 +134,7 @@ start_frontend() {
     # 等待前端启动
     print_info "等待前端服务启动..."
     for i in {1..30}; do
-        if curl -s http://localhost:5173 > /dev/null 2>&1; then
+        if curl -s http://localhost:3000 > /dev/null 2>&1; then
             print_success "前端服务已启动 (PID: $FRONTEND_PID)"
             return 0
         fi
@@ -149,44 +149,71 @@ start_frontend() {
 show_status() {
     echo ""
     echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                      服务已启动！                               ║${NC}"
+    echo -e "${GREEN}║                   DeepSeeker 服务已启动！                        ║${NC}"
     echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}访问地址：${NC}"
-    echo "  🌐 前端界面: http://localhost:5173"
+    echo "  🌐 Web 界面: http://localhost:3000"
     echo "  🔌 后端 API: http://localhost:8000"
     echo "  📚 API 文档: http://localhost:8000/docs"
+    echo ""
+    echo -e "${CYAN}研究助手功能：${NC}"
+    echo "  🧠 洞察概览: http://localhost:3000/research"
+    echo "  📊 主题聚类: http://localhost:3000/clusters"
+    echo "  📈 趋势分析: http://localhost:3000/trends"
+    echo "  📝 研究报告: http://localhost:3000/reports"
     echo ""
     echo -e "${CYAN}日志文件：${NC}"
     echo "  📄 后端日志: ${PROJECT_ROOT}/backend.log"
     echo "  📄 前端日志: ${PROJECT_ROOT}/frontend.log"
     echo ""
-    echo -e "${YELLOW}停止服务：${NC}"
-    echo "  ./stop.sh"
-    echo ""
-    echo -e "${YELLOW}查看日志：${NC}"
-    echo "  tail -f backend.log   # 后端日志"
-    echo "  tail -f frontend.log  # 前端日志"
+    echo -e "${YELLOW}停止服务：${NC} ./stop.sh"
+    echo -e "${YELLOW}桌面应用：${NC} ./start.sh --electron"
     echo ""
 }
 
 # 信号处理
-trap 'cleanup; exit 0' SIGINT SIGTERM
+trap 'cleanup; exit 0' SIGINT SIGTERM EXIT
+
+# 启动 Electron 桌面应用
+start_electron() {
+    start_frontend
+
+    print_info "启动 Electron 桌面应用..."
+    
+    ELECTRON_DIR="${PROJECT_ROOT}/electron"
+    
+    if [[ ! -d "${ELECTRON_DIR}/node_modules" ]]; then
+        print_info "安装 Electron 依赖..."
+        cd "$ELECTRON_DIR"
+        npm install
+    fi
+    
+    cd "$ELECTRON_DIR"
+    npm run dev
+}
 
 # 主流程
 main() {
     print_banner
     check_installation
     cleanup
-    start_backend
-    start_frontend
-    show_status
     
-    # 打开浏览器（macOS）
-    if command -v open &> /dev/null; then
-        sleep 2
-        open http://localhost:5173
+    # 检查是否启动 Electron
+    if [[ "$1" == "--electron" ]] || [[ "$1" == "-e" ]]; then
+        print_info "启动桌面应用模式..."
+        start_electron
+    else
+        start_backend
+        start_frontend
+        show_status
+        
+        # 打开浏览器（macOS）
+        if command -v open &> /dev/null; then
+            sleep 2
+            open http://localhost:3000
+        fi
     fi
 }
 
-main
+main "$1"

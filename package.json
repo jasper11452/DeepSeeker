@@ -1,0 +1,29 @@
+{
+  "name": "deepseeker-monorepo",
+  "version": "0.2.0",
+  "description": "DeepSeeker - AI 研究助手",
+  "private": true,
+  "scripts": {
+    "install:all": "npm run install:frontend && npm run install:electron",
+    "install:frontend": "cd frontend && npm install",
+    "install:electron": "cd electron && npm install",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && source .venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:frontend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:electron": "cd electron && npm run build",
+    "electron": "npm run build:frontend && cd electron && npm start",
+    "electron:dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"sleep 5 && cd electron && npm run dev\"",
+    "start": "./start.sh",
+    "stop": "./stop.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Jasper",
+  "license": "MIT"
+}

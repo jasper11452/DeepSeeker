@@ -4,6 +4,14 @@ import { DocumentLibraryView } from './views/DocumentLibraryView';
 import { DocumentDetailView } from './views/DocumentDetailView';
 import { ChatView } from './views/ChatView';
 import { GraphView } from './views/GraphView';
+// 研究助手视图
+import { ResearchInsightsView } from './views/ResearchInsightsView';
+import { ResearchOverviewView } from './views/ResearchOverviewView';
+import { ClustersView } from './views/ClustersView';
+import { TrendsView } from './views/TrendsView';
+import { ReportsView } from './views/ReportsView';
+import { GapsView } from './views/GapsView';
+
 import { SettingsModal } from './components/SettingsModal';
 import { CommandPalette } from './components/CommandPalette';
 import { useUIStore, useThemeStore } from '@/lib/store';
@@ -71,14 +79,46 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Handle Electron navigation events
+  useEffect(() => {
+    // @ts-ignore
+    if (window.electronAPI?.onNavigate) {
+      // @ts-ignore
+      const unsubscribe = window.electronAPI.onNavigate((path: string) => {
+        window.location.href = path;
+      });
+      return unsubscribe;
+    }
+  }, []);
+
+  // Handle Electron settings event
+  useEffect(() => {
+    // @ts-ignore
+    if (window.electronAPI?.onOpenSettings) {
+      // @ts-ignore
+      const unsubscribe = window.electronAPI.onOpenSettings(() => {
+        useUIStore.getState().openSettings();
+      });
+      return unsubscribe;
+    }
+  }, []);
+
   return (
     <ErrorBoundary>
       <Routes>
         <Route path="/" element={<MainLayout />}>
+          {/* 基础功能 */}
           <Route index element={<DocumentLibraryView />} />
           <Route path="document/:id" element={<DocumentDetailView />} />
           <Route path="chat/:conversationId?" element={<ChatView />} />
           <Route path="graph" element={<GraphView />} />
+          {/* 研究助手功能 */}
+          <Route path="insights" element={<ResearchInsightsView />} />
+          <Route path="research" element={<ResearchOverviewView />} />
+          <Route path="clusters" element={<ClustersView />} />
+          <Route path="trends" element={<TrendsView />} />
+          <Route path="reports" element={<ReportsView />} />
+          <Route path="gaps" element={<GapsView />} />
         </Route>
       </Routes>
 

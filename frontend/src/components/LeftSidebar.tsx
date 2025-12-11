@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Plus, MessageSquare, Settings, Search, Trash2, FolderOpen } from 'lucide-react';
+import { 
+  Plus, MessageSquare, Settings, Search, Trash2, FolderOpen,
+  Brain, Layers, TrendingUp, FileText, AlertCircle, Network, ChevronDown, ChevronRight
+} from 'lucide-react';
 import { useConversationStore } from '../stores/conversationStore';
 import { useUIStore } from '../lib/store';
 import { cn } from '../lib/utils';
@@ -26,6 +29,7 @@ export function LeftSidebar() {
     return saved ? parseInt(saved, 10) : 260;
   });
   const [isResizing, setIsResizing] = useState(false);
+  const [researchExpanded, setResearchExpanded] = useState(true);
 
   React.useEffect(() => {
     fetchConversations();
@@ -45,7 +49,7 @@ export function LeftSidebar() {
     (mouseMoveEvent: MouseEvent) => {
       if (isResizing) {
         const newWidth = mouseMoveEvent.clientX;
-        if (newWidth >= 200 && newWidth <= 480) { // Min 200, Max 480
+        if (newWidth >= 200 && newWidth <= 480) {
           setWidth(newWidth);
         }
       }
@@ -98,7 +102,7 @@ export function LeftSidebar() {
 
       {/* Header with Global Search and Navigation */}
       <div className="p-4 space-y-3">
-        {/* Global Search Button - triggers Command Palette */}
+        {/* Global Search Button */}
         <button
           onClick={openCommandPalette}
           className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 dark:bg-dark-tertiary text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-dark-hover hover:text-gray-900 dark:hover:text-white text-sm transition-all"
@@ -130,8 +134,71 @@ export function LeftSidebar() {
             新建
           </button>
         </div>
+      </div>
 
-        {/* Conversation Filter */}
+      {/* 研究助手导航 */}
+      <div className="px-4 pb-2">
+        <button
+          onClick={() => setResearchExpanded(!researchExpanded)}
+          className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider hover:text-gray-700 dark:hover:text-gray-300"
+        >
+          <span className="flex items-center gap-1.5">
+            <Brain className="w-3.5 h-3.5" />
+            研究助手
+          </span>
+          {researchExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </button>
+        
+        {researchExpanded && (
+          <div className="mt-1 space-y-0.5">
+            <NavItem 
+              icon={<Brain className="w-4 h-4" />} 
+              label="洞察概览" 
+              path="/research"
+              active={location.pathname === '/research'}
+              onClick={() => navigate('/research')}
+            />
+            <NavItem 
+              icon={<Layers className="w-4 h-4" />} 
+              label="主题聚类" 
+              path="/clusters"
+              active={location.pathname === '/clusters'}
+              onClick={() => navigate('/clusters')}
+            />
+            <NavItem 
+              icon={<TrendingUp className="w-4 h-4" />} 
+              label="趋势分析" 
+              path="/trends"
+              active={location.pathname === '/trends'}
+              onClick={() => navigate('/trends')}
+            />
+            <NavItem 
+              icon={<FileText className="w-4 h-4" />} 
+              label="研究报告" 
+              path="/reports"
+              active={location.pathname === '/reports'}
+              onClick={() => navigate('/reports')}
+            />
+            <NavItem 
+              icon={<AlertCircle className="w-4 h-4" />} 
+              label="知识空白" 
+              path="/gaps"
+              active={location.pathname === '/gaps'}
+              onClick={() => navigate('/gaps')}
+            />
+            <NavItem 
+              icon={<Network className="w-4 h-4" />} 
+              label="知识图谱" 
+              path="/graph"
+              active={location.pathname === '/graph'}
+              onClick={() => navigate('/graph')}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Conversation Filter */}
+      <div className="px-4 pb-2">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 dark:text-gray-500" />
           <input
@@ -188,5 +255,30 @@ export function LeftSidebar() {
         </button>
       </div>
     </aside>
+  );
+}
+
+interface NavItemProps {
+  icon: React.ReactNode;
+  label: string;
+  path: string;
+  active: boolean;
+  onClick: () => void;
+}
+
+function NavItem({ icon, label, active, onClick }: NavItemProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all",
+        active
+          ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-medium"
+          : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-dark-hover hover:text-gray-900 dark:hover:text-gray-200"
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }
